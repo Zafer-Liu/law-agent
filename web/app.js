@@ -22,8 +22,9 @@
     .then((r) => r.json())
     .then((cfg) => {
       const badge = document.getElementById("backend-badge");
-      badge.textContent = cfg.retrieval_backend === "vector+lexical+fts5"
+      const retrievalText = cfg.retrieval_backend === "vector+lexical+fts5"
         ? "语义检索已启用" : "词法检索（未配置向量服务）";
+      badge.textContent = retrievalText + (cfg.jev_configured ? " · Jev 门控" : "");
       if (!cfg.llm_configured) {
         toast("模型服务未配置，请设置 LAW_LLM_* 环境变量");
       }

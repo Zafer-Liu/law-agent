@@ -15,6 +15,7 @@ from .courtroom import cases as court_cases
 from .courtroom.engine import TrialEngine
 from .database import Database, new_id, now_iso, public_message
 from .documents import FORMATS, parse_document, split_sections
+from .jev_gate import configured as jev_configured
 from .llm import LLMClient, LLMError
 from .rag import EmbeddingClient, retrieve, terms, tokenize
 
@@ -133,6 +134,7 @@ def create_app() -> Flask:
     def config():
         return jsonify({"llm_configured": llm.configured,
                         "embed_configured": embedder.configured,
+                        "jev_configured": jev_configured(),
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
 
     # ------------------------------------------------------------------

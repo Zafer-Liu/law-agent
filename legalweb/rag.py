@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 import jieba
 import requests
 
+from . import jev_gate
+
 STOP_WORDS = frozenset("请 请问 帮我 帮 帮助 解释 讲解 梳理 总结 咨询 一下 这个 那个 什么 如何 为什么 一个 一些 进行 关于 根据 内容 知识点 的 了 是 在 和 与 或 就 都 吗 呢 把 将 用 以及 并且 可以 我 你 它 继续 详细 简单 通俗 学习 当前 范围 现在 比如 说说 告诉 谢谢 麻烦".split())
 
 
@@ -116,7 +118,8 @@ def lexical_score(query: str, text: str) -> float:
     return phrase + english + chinese
 
 
-def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: EmbeddingClient, limit=6) -> dict:
+def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: EmbeddingClient,
+             limit=6, gate_hook=None) -> dict:
     if not chunks:
         return {"hits": [], "backend": "lexical+fts5", "degraded": True}
     allowed = {chunk["id"]: chunk for chunk in chunks}
@@ -153,5 +156,6 @@ def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: Embed
         hit.update(rrf_score=round(scores[key], 4), lexical_score=round(lexical[key], 4),
                    vector_score=round(vector_scores.get(key, 0), 4))
         hits.append(hit)
+    hits = jev_gate.apply(query, hits, log_fn=gate_hook)
     return {"hits": hits, "backend": "vector+lexical+fts5" if vector_active else "lexical+fts5",
             "degraded": not vector_active}

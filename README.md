@@ -26,12 +26,14 @@ python -m legalweb
 | `LAW_LLM_MODEL` | 模型名称 |
 | `LAW_EMBED_BASE_URL` | （可选）向量服务地址，配置后启用语义检索 |
 | `LAW_EMBED_API_KEY` | （可选）向量服务 Key |
+| `TYPESAFE_API_KEY` | （可选）TypeSafe API Key，配置后启用 Jev 检索质量门控 |
+| `LAW_JEV_GATE` | Jev 开关，默认 `1`；设为 `0` 可关闭 |
 
 未配置向量服务时自动降级为词法 + FTS5 检索，界面会明确标注。
 
 ## 技术架构
 
-- **后端**：Flask + SQLite/FTS5 + jieba 词法检索 + 可选向量（RRF 融合）
+- **后端**：Flask + SQLite/FTS5 + jieba 词法检索 + 可选向量（RRF 融合）+ 可选 Jev 相关度/提示注入门控
 - **前端**：原生 HTML/JS/CSS，零构建步骤
 - **LLM**：OpenAI 兼容接口，支持备用模型自动切换
 - **模拟法庭**：多 Agent 编排（公诉人/辩护人/被告人/书记员），程序状态机保证庭审流程合法性，封闭卷宗接地防幻觉；庭审在「法庭调查后」「法庭辩论后」两次检查点暂停，等待陪审员（用户）提交预判与发问后由 `/continue` 续跑，评议复盘含陪审员预判轨迹
