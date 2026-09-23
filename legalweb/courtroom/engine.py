@@ -3,7 +3,7 @@
 程序正义部分（开庭、阶段转换、举证顺序、检查点、休庭评议）由纯代码状态机
 保证，不经模型生成；实质对抗部分（举证质证、辩论、陈述、陪审员发问的作答）
 由各 Agent 生成。庭审在「法庭调查后」「法庭辩论后」两次暂停（checkpoint），
-等待人民陪审员（用户）提交阶段性预判与发问，再由 /continue 接口续跑——
+等待用户提交陪审员预判或所选诉讼角色发言，再由 /continue 接口续跑——
 参与感由状态机的检查点保证，而不是提示词措辞。
 """
 
@@ -17,27 +17,58 @@ from .agents import JUDGE_BADGE, ROLES
 STAGE_ORDER = ["opening", "investigation", "mid_review", "debate", "poll2",
                "statement", "deliberation"]
 
+PLAYER_ROLES = {
+    "juror": {"name": "人民陪审员", "badge": "陪"},
+    "prosecutor": {"name": "公诉人", "badge": "诉"},
+    "defender": {"name": "辩护人", "badge": "辩"},
+    "defendant": {"name": "被告人", "badge": "被"},
+}
+
+ROLE_CHECKPOINTS = {
+    "prosecutor": {
+        "investigation": ("补充举证意见", "结合卷宗证据编号，说明哪些事实支持指控。",
+                          "例如：监控视频（E4）显示追刺发生在刘海转身跑向轿车之后……"),
+        "debate": ("发表最终公诉意见", "回应辩方观点，收束你对定罪与防卫边界的主张。",
+                   "围绕侵害是否结束、防卫是否超过必要限度发表意见……"),
+    },
+    "defender": {
+        "investigation": ("提交质证意见", "指出证据中对被告人有利的细节或证明局限。",
+                          "例如：E4 显示从夺刀到追刺结束仅约 11 秒，冲突具有连续性……"),
+        "debate": ("发表最终辩护意见", "回应公诉意见，收束你的正当防卫主张。",
+                   "围绕严重暴力侵害是否持续、能否苛求防卫人精准判断发表意见……"),
+    },
+    "defendant": {
+        "investigation": ("补充事实陈述", "依据讯问笔录与庭审证据，说明你当时看到和担心什么。",
+                          "只能陈述卷宗已有事实，例如你为何认为危险仍未解除……"),
+        "debate": ("作最后陈述", "说明你对行为性质、死亡结果和法庭裁判的态度。",
+                   "请使用第一人称，保持克制，不补充卷宗以外的新事实……"),
+    },
+}
+
 
 def judge_line(text: str) -> dict:
     return {"type": "line", "role": "judge", "name": "审判长", "badge": JUDGE_BADGE, "text": text}
 
 
 class TrialEngine:
-    def __init__(self, case: dict, llm):
+    def __init__(self, case: dict, llm, player_role: str = "juror"):
         self.case = case
         self.llm = llm
+        self.player_role = player_role if player_role in PLAYER_ROLES else "juror"
         self.transcript = []      # [{"role","name","text"}]
         self.summaries = []       # 书记员阶段纪要
         self.summarized_upto = 0
         self.polls = []           # 陪审员阶段性预判 [{"stage","option_id","label"}]
         self.questions = []       # 陪审员庭审发问 [{"target","question"}]
+        self.contributions = []   # 用户以诉讼角色提交的关键发言
 
     # ------------------------------------------------------------------
     # 状态存取（检查点续跑：整场庭审可序列化到 court_sessions.state）
     # ------------------------------------------------------------------
     def export_state(self) -> dict:
         return {"summaries": self.summaries, "summarized_upto": self.summarized_upto,
-                "polls": self.polls, "questions": self.questions}
+                "polls": self.polls, "questions": self.questions,
+                "player_role": self.player_role, "contributions": self.contributions}
 
     def load_state(self, state: dict):
         state = state or {}
@@ -45,6 +76,10 @@ class TrialEngine:
         self.summarized_upto = int(state.get("summarized_upto") or 0)
         self.polls = list(state.get("polls") or [])
         self.questions = list(state.get("questions") or [])
+        role = state.get("player_role")
+        if role in PLAYER_ROLES:
+            self.player_role = role
+        self.contributions = list(state.get("contributions") or [])
 
     # ------------------------------------------------------------------
     # 上下文组装
@@ -184,6 +219,9 @@ class TrialEngine:
     def stage_statement(self):
         yield {"type": "phase", "phase": "statement", "title": "最后陈述"}
         yield judge_line("法庭辩论结束。被告人陈明，你可以作最后陈述。")
+        if self.player_role == "defendant":
+            yield judge_line("被告人刚才提交的最后陈述已记录在案。")
+            return
         yield from self.turn("defendant",
                              "作最后陈述：你对行为性质的态度、对被害人死亡结果的心情，"
                              "以及你对法庭的请求。不超过120字，语气恳切。")
@@ -205,6 +243,9 @@ class TrialEngine:
             if name in stages:
                 yield from stages[name]()
             elif name == "mid_review":
+                if self.player_role != "juror":
+                    yield from self._role_checkpoint("investigation", "debate")
+                    return
                 yield judge_line("法庭调查结束。在进入法庭辩论之前，请人民陪审员记录阶段性意见，"
                                  "并可就卷宗证据向控辩双方发问。")
                 yield {"type": "checkpoint", "kind": "mid_review",
@@ -212,6 +253,9 @@ class TrialEngine:
                        "options": self.case["options"], "allow_question": True}
                 return
             elif name == "poll2":
+                if self.player_role != "juror":
+                    yield from self._role_checkpoint("debate", "statement")
+                    return
                 yield judge_line("法庭辩论结束。请人民陪审员再次记录意见——听完控辩双方的对抗，"
                                  "你的判断是否发生了变化？")
                 prev = next((p["label"] for p in reversed(self.polls)
@@ -222,10 +266,25 @@ class TrialEngine:
                        "previous_label": prev}
                 return
             elif name == "deliberation":
-                yield judge_line("现在休庭，合议庭评议。作为今天的人民陪审员，请你根据庭审查明的事实"
-                                 "与法律，独立作出评议。")
-                yield {"type": "await_deliberation", "options": self.case["options"]}
+                if self.player_role == "juror":
+                    text = ("现在休庭，合议庭评议。作为今天的人民陪审员，请你根据庭审查明的事实"
+                            "与法律，独立作出评议。")
+                else:
+                    text = ("你的角色任务已经完成。现在请暂时跳出诉讼立场，根据庭审查明的事实与法律，"
+                            "作出最终裁判预测。")
+                yield judge_line(text)
+                yield {"type": "await_deliberation", "options": self.case["options"],
+                       "player_role": self.player_role}
                 return
+
+    def _role_checkpoint(self, stage: str, next_stage: str):
+        role = PLAYER_ROLES[self.player_role]
+        title, prompt, placeholder = ROLE_CHECKPOINTS[self.player_role][stage]
+        yield judge_line(f"现在请{role['name']}提交“{title}”，发言将直接记入庭审记录。")
+        yield {"type": "checkpoint", "kind": "role_input", "stage": stage,
+               "role": self.player_role, "role_name": role["name"], "badge": role["badge"],
+               "title": title, "prompt": prompt, "placeholder": placeholder,
+               "next": next_stage}
 
     # ------------------------------------------------------------------
     # 检查点处理：记录陪审员预判；有发问则由被问方当庭作答
@@ -253,6 +312,22 @@ class TrialEngine:
                                  f"“{label}”，合议庭评议时将重点关注这一变化。")
             else:
                 yield judge_line(f"书记员记录：人民陪审员在法庭辩论后的阶段意见为——{label}。")
+        elif kind == "role_input":
+            stage = (data.get("stage") or "").strip()
+            statement = (data.get("statement") or "").strip()
+            if self.player_role == "juror" or stage not in ("investigation", "debate"):
+                raise ValueError("无效的角色发言环节")
+            if not 10 <= len(statement) <= 500:
+                raise ValueError("角色发言需在 10-500 字之间")
+            role = PLAYER_ROLES[self.player_role]
+            self.contributions = [item for item in self.contributions if item.get("stage") != stage]
+            self.contributions.append({"stage": stage, "role": self.player_role,
+                                       "name": role["name"], "text": statement})
+            self.transcript.append({"role": self.player_role, "name": role["name"],
+                                    "text": statement, "player": True})
+            yield {"type": "line", "role": self.player_role, "name": role["name"],
+                   "badge": role["badge"], "text": statement, "player": True}
+            yield judge_line(f"{role['name']}的发言已记录在案，庭审继续。")
 
     def _record_poll(self, stage: str, data: dict) -> str:
         option_id = (data.get("poll") or "").strip()
@@ -272,7 +347,8 @@ class TrialEngine:
         verdict = case["real_verdict"]
         trajectory = [{"stage": p["stage"], "label": p["label"]} for p in self.polls]
         yield {"type": "verdict", "real": verdict, "yours": deliberation,
-               "trajectory": trajectory}
+               "trajectory": trajectory, "player_role": self.player_role,
+               "contributions": self.contributions}
         jury_text = deliberation["label"]
         if deliberation.get("convict"):
             jury_text += f"；量刑意见：{deliberation['years']} 年"
@@ -290,9 +366,13 @@ class TrialEngine:
             trail.append(f"{when}预判：{p['label']}")
         for q in self.questions:
             trail.append(f"庭审中向{ROLES[q['target']]['name']}发问：“{q['question']}”")
+        for item in self.contributions:
+            when = "法庭调查后" if item["stage"] == "investigation" else "法庭辩论后"
+            trail.append(f"{when}以{item['name']}身份发言：“{item['text']}”")
         if trail:
-            parts.append("【人民陪审员庭审轨迹】\n" + "\n".join(trail))
-        parts.append(f"【人民陪审员评议】\n{jury_text}")
+            parts.append("【用户庭审参与轨迹】\n" + "\n".join(trail))
+        final_label = "人民陪审员评议" if self.player_role == "juror" else "用户最终裁判预测"
+        parts.append(f"【{final_label}】\n{jury_text}")
         role = ROLES["judge_review"]
         messages = [{"role": "system", "content": role["system"]},
                     {"role": "user", "content": "\n\n".join(parts)}]

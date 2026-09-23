@@ -1,9 +1,10 @@
-/* 法晓 · 模拟法庭 Tab：法庭式布局 + 人民陪审员检查点交互 */
+/* 法晓 · 模拟法庭 Tab：角色选择 + 法庭式布局 + 关键回合交互 */
 
 (function () {
   "use strict";
 
   const selectEl = document.getElementById("court-select");
+  const roleSelectEl = document.getElementById("court-role-select");
   const trialEl = document.getElementById("court-trial");
   const deliberationEl = document.getElementById("court-deliberation");
   const verdictEl = document.getElementById("court-verdict");
@@ -21,8 +22,18 @@
   const checkpointPanel = document.getElementById("checkpoint-panel");
   const logList = document.getElementById("court-log-list");
   const phaseSteps = document.getElementById("phase-steps");
+  const playerRoleBadge = document.getElementById("court-player-role");
+  const roleStart = document.getElementById("role-start");
+
+  const roleMeta = {
+    juror: { name: "人民陪审员", badge: "陪" },
+    prosecutor: { name: "公诉人", badge: "诉" },
+    defender: { name: "辩护人", badge: "辩" },
+    defendant: { name: "被告人", badge: "被" },
+  };
 
   let currentCaseId = "";
+  let selectedRole = "";
   let sessionId = "";
   let caseData = null;
   let pendingCheckpoint = null;      // 等待陪审员输入的检查点事件
@@ -32,6 +43,7 @@
   const citedEvidence = new Set();   // 发言中出现过的证据编号
   const markedEvidence = new Set();  // 用户标注的关键证据
   const pollHistory = [];            // [{stage,label}] 预判轨迹
+  const roleContributions = [];      // [{stage,title}] 玩家角色发言轨迹
 
   // ---- 加载案例列表 ----
   fetch("/api/court/cases")
@@ -42,7 +54,7 @@
         const card = document.createElement("button");
         card.type = "button";
         card.className = "case-card";
-        card.setAttribute("aria-label", `开始案例：${c.title}`);
+        card.setAttribute("aria-label", `选择案例并挑选角色：${c.title}`);
         card.innerHTML = `
           <h3>${escapeHtml(c.title)}</h3>
           <div class="subtitle">${escapeHtml(c.subtitle)}</div>
@@ -60,7 +72,7 @@
     })
     .catch(() => { caseCardsEl.innerHTML = "<p class='muted'>加载案例失败</p>"; });
 
-  // ---- 加载案例详情并开始庭审 ----
+  // ---- 加载案例详情并选择角色 ----
   async function loadCase(caseId) {
     try {
       const res = await fetch(`/api/court/cases/${caseId}`);
@@ -69,15 +81,20 @@
       currentCaseId = caseId;
 
       resetTrialState();
+      selectedRole = "";
       selectEl.hidden = true;
-      trialEl.hidden = false;
+      roleSelectEl.hidden = false;
+      trialEl.hidden = true;
       deliberationEl.hidden = true;
       verdictEl.hidden = true;
-      courtTitle.textContent = caseData.title + " · " + caseData.subtitle;
-      courtPhase.textContent = "准备开庭";
-
-      buildDossierPanel();
-      startTrial(caseId);
+      document.getElementById("role-case-title").textContent = caseData.title + " · " + caseData.subtitle;
+      roleSelectEl.querySelectorAll(".role-option").forEach((button) => {
+        button.classList.remove("selected");
+        button.setAttribute("aria-pressed", "false");
+      });
+      roleStart.disabled = true;
+      roleStart.textContent = "选择角色后开始庭审";
+      roleSelectEl.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch {
       toast("网络错误");
     }
@@ -92,6 +109,7 @@
     citedEvidence.clear();
     markedEvidence.clear();
     pollHistory.length = 0;
+    roleContributions.length = 0;
     checkpointPanel.hidden = true;
     checkpointPanel.innerHTML = "";
     logList.innerHTML = "";
@@ -99,7 +117,43 @@
     speechBadge.textContent = "审";
     speechTextEl.textContent = "法槌即将落下，庭审马上开始…";
     setPhaseStep("");
-    document.querySelectorAll(".court-scene .bench").forEach((b) => b.classList.remove("speaking"));
+    playerRoleBadge.textContent = "";
+    document.querySelectorAll(".court-scene .bench").forEach((bench) => {
+      bench.classList.remove("speaking", "is-player");
+    });
+  }
+
+  roleSelectEl.querySelectorAll(".role-option").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedRole = button.dataset.role;
+      roleSelectEl.querySelectorAll(".role-option").forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("selected", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      roleStart.disabled = false;
+      roleStart.textContent = `以${roleMeta[selectedRole].name}身份开始`;
+    });
+  });
+
+  roleStart.addEventListener("click", () => {
+    if (!selectedRole) return;
+    roleSelectEl.hidden = true;
+    trialEl.hidden = false;
+    courtTitle.textContent = caseData.title + " · " + caseData.subtitle;
+    courtPhase.textContent = "准备开庭";
+    playerRoleBadge.textContent = "你的角色 · " + roleMeta[selectedRole].name;
+    applyPlayerRole();
+    buildDossierPanel();
+    startTrial(currentCaseId);
+  });
+
+  document.getElementById("role-back").addEventListener("click", returnToCases);
+
+  function applyPlayerRole() {
+    document.querySelectorAll(".court-scene .bench").forEach((bench) => {
+      bench.classList.toggle("is-player", bench.dataset.role === selectedRole);
+    });
   }
 
   // ---- 卷宗面板 ----
@@ -172,7 +226,10 @@
     trialAbortController = controller;
     try {
       const res = await fetch(`/api/court/cases/${caseId}/trial`, {
-        method: "POST", signal: controller.signal,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: selectedRole }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -203,7 +260,7 @@
       case "line":
         // 审判长程序性台词（纯代码模板，一次性显示）
         setSpeech(event.role, event.name, event.badge, event.text);
-        appendLog(event.role, event.name, event.text);
+        appendLog(event.role, event.name, event.text, event.player);
         break;
 
       case "turn_start":
@@ -237,12 +294,12 @@
         break;
 
       case "resume":
-        pendingCheckpoint = null;
         checkpointPanel.hidden = true;
         break;
 
       case "await_deliberation":
         hideStatus();
+        pendingCheckpoint = null;
         courtPhase.textContent = "休庭评议";
         setPhaseStep("deliberation");
         showDeliberation(event.options);
@@ -252,7 +309,16 @@
         hideStatus();
         toast(event.error);
         // 检查点阶段失败：重新显示表单，让用户重试（后端已恢复同一检查点）
-        if (pendingCheckpoint) checkpointPanel.hidden = false;
+        if (pendingCheckpoint) {
+          if (pendingCheckpoint.kind === "role_input") {
+            roleContributions.pop();
+            const playerLines = logList.querySelectorAll(".player-line");
+            playerLines[playerLines.length - 1]?.remove();
+          } else {
+            pollHistory.pop();
+          }
+          checkpointPanel.hidden = false;
+        }
         break;
     }
   }
@@ -297,9 +363,10 @@
     });
   }
 
-  function appendLog(role, name, text) {
+  function appendLog(role, name, text, isPlayer = false) {
     const line = document.createElement("div");
     line.className = `log-line ${role || ""}`;
+    if (isPlayer) line.classList.add("player-line");
     const b = document.createElement("b");
     b.textContent = name + "：";
     line.appendChild(b);
@@ -319,6 +386,10 @@
 
   // ---- 检查点：阶段性预判与发问 ----
   function renderCheckpoint(cp) {
+    if (cp.kind === "role_input") {
+      renderRoleCheckpoint(cp);
+      return;
+    }
     setSpeaking("juror", "人民陪审员（你）", "陪");
     speechTextEl.textContent = cp.kind === "mid_review"
       ? "轮到你了——请在下方记录你的阶段性预判，还可以就卷宗证据向控辩双方发问。"
@@ -371,6 +442,66 @@
     card.querySelector("#cp-submit").addEventListener("click", () => submitCheckpoint(cp, card, selected));
   }
 
+  function renderRoleCheckpoint(cp) {
+    setSpeaking(cp.role, `${cp.role_name}（你）`, cp.badge);
+    speechTextEl.textContent = `轮到你以${cp.role_name}身份发言。你的文字将直接进入庭审记录。`;
+    const card = document.createElement("div");
+    card.className = "cp-card role-cp-card";
+    card.innerHTML = `
+      <div class="cp-role-head">
+        <span class="role-sigil" aria-hidden="true">${escapeHtml(cp.badge)}</span>
+        <div><div class="cp-title">${escapeHtml(cp.title)}</div>
+        <p class="cp-quote">${escapeHtml(cp.prompt)}</p></div>
+      </div>
+      <label class="cp-label" for="cp-statement">你的发言 <small>（10-500 字，将记入庭审记录）</small></label>
+      <div class="cp-question">
+        <textarea id="cp-statement" rows="5" maxlength="500"
+          placeholder="${escapeHtml(cp.placeholder)}"></textarea>
+        <div class="statement-count"><span id="statement-count">0</span>/500</div>
+      </div>
+      <button type="button" class="primary-btn" id="cp-submit" disabled>提交发言，继续庭审</button>
+    `;
+    checkpointPanel.innerHTML = "";
+    checkpointPanel.appendChild(card);
+    checkpointPanel.hidden = false;
+    const textarea = card.querySelector("#cp-statement");
+    const submit = card.querySelector("#cp-submit");
+    textarea.addEventListener("input", () => {
+      const length = textarea.value.trim().length;
+      card.querySelector("#statement-count").textContent = String(length);
+      submit.disabled = length < 10;
+    });
+    submit.addEventListener("click", () => submitRoleCheckpoint(cp, card));
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    textarea.focus();
+  }
+
+  async function submitRoleCheckpoint(cp, card) {
+    const statement = card.querySelector("#cp-statement").value.trim();
+    if (statement.length < 10) { toast("请至少写 10 个字"); return; }
+    roleContributions.push({ stage: cp.stage, title: cp.title });
+    checkpointPanel.hidden = true;
+    try {
+      const res = await fetch(`/api/court/sessions/${sessionId}/continue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ statement }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || "提交失败");
+        roleContributions.pop();
+        checkpointPanel.hidden = false;
+        return;
+      }
+      await readSse(res, handleTrialEvent);
+    } catch {
+      roleContributions.pop();
+      toast("网络错误");
+      checkpointPanel.hidden = false;
+    }
+  }
+
   async function submitCheckpoint(cp, card, selected) {
     if (!selected) { toast("请先选择你的阶段性预判"); return; }
     const body = { poll: selected };
@@ -412,12 +543,20 @@
   function showDeliberation(options) {
     trialEl.hidden = true;
     deliberationEl.hidden = false;
+    const isJuror = selectedRole === "juror";
+    document.getElementById("deliberation-title").textContent = isJuror ? "休庭评议" : "角色任务完成 · 裁判预测";
+    document.getElementById("deliberation-intro").textContent = isJuror
+      ? "作为人民陪审员，请根据庭审查明的事实与法律，独立作出你的评议。"
+      : `你已完成${roleMeta[selectedRole].name}的关键发言。现在请暂时跳出诉讼立场，作出最终裁判预测。`;
 
     // 预判轨迹 + 关键证据标注回顾
     const trajEl = document.getElementById("delib-traj");
     const chips = [];
     pollHistory.forEach((p, i) => {
       chips.push(trajChip(`${i === 0 ? "调查后" : "辩论后"}预判：${p.label}`));
+    });
+    roleContributions.forEach((item) => {
+      chips.push(trajChip(`已提交：${item.title}`));
     });
     if (markedEvidence.size) {
       chips.push(trajChip(`关键证据：${Array.from(markedEvidence).join("、")}`, "final"));
@@ -522,6 +661,9 @@
     (event.trajectory || []).forEach((p, i) => {
       chips.push(trajChip(`${i === 0 ? "调查后" : "辩论后"}预判：${p.label}`));
     });
+    (event.contributions || []).forEach((item) => {
+      chips.push(trajChip(`${item.name}发言已记录`));
+    });
     chips.push(trajChip(`你的评议：${event.yours.label}`, "final"));
     const realShort = (event.real.summary || "").replace(/。$/, "");
     chips.push(trajChip(`法院判决：${realShort.length > 22 ? realShort.slice(0, 22) + "…" : realShort}`, "real"));
@@ -531,21 +673,26 @@
 
   // ---- 再来一局 ----
   document.getElementById("court-restart").addEventListener("click", () => {
-    verdictEl.hidden = true;
-    deliberationEl.hidden = true;
-    trialEl.hidden = true;
-    selectEl.hidden = false;
-    resetTrialState();
+    returnToCases();
   });
 
   document.getElementById("court-exit").addEventListener("click", () => {
     if (trialAbortController) trialAbortController.abort();
+    returnToCases();
+  });
+
+  function returnToCases() {
     verdictEl.hidden = true;
     deliberationEl.hidden = true;
     trialEl.hidden = true;
+    roleSelectEl.hidden = true;
     selectEl.hidden = false;
     resetTrialState();
-  });
+    selectedRole = "";
+    currentCaseId = "";
+    caseData = null;
+    selectEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   function escapeHtml(text) {
     const div = document.createElement("div");

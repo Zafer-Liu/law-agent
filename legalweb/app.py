@@ -21,7 +21,7 @@ from flask import (
 
 from . import qa
 from .courtroom import cases as court_cases
-from .courtroom.engine import TrialEngine
+from .courtroom.engine import PLAYER_ROLES, TrialEngine
 from .database import Database, new_id, now_iso, public_message
 from .documents import FORMATS, parse_document, split_sections
 from .jev_gate import configured as jev_configured
@@ -40,6 +40,7 @@ BUILTIN_KB_DIRS = (
 
 MAX_QUESTION = 2000
 MAX_COURT_QUESTION = 200
+MAX_COURT_STATEMENT = 500
 # The parser also enforces character and DOCX-XML limits.  Rejecting an
 # overlarge request before saving it protects the uploads directory as well.
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
@@ -399,14 +400,19 @@ def create_app() -> Flask:
             abort(404, "案例不存在")
         if not court_llm.configured:
             abort(503, "模拟法庭服务暂不可用，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        player_role = text_value(data, "role", limit=32) or "juror"
+        if player_role not in PLAYER_ROLES:
+            abort(400, "请选择有效的庭审角色")
         session_id = new_id()
-        engine = TrialEngine(case, court_llm)
+        engine = TrialEngine(case, court_llm, player_role=player_role)
 
         def stream():
-            yield sse({"type": "session", "session_id": session_id, "case_id": case_id})
+            yield sse({"type": "session", "session_id": session_id, "case_id": case_id,
+                       "player_role": player_role})
             try:
                 for event in engine.run():
-                    # 检查点：暂停庭审，等待陪审员（用户）通过 /continue 提交意见
+                    # 检查点：暂停庭审，等待用户通过 /continue 提交预判或角色发言。
                     if event.get("type") == "checkpoint":
                         save_court_session(session_id, case_id, engine,
                                            next_stage=event["next"], checkpoint=event)
@@ -422,7 +428,7 @@ def create_app() -> Flask:
 
     @app.post("/api/court/sessions/<session_id>/continue")
     def court_continue(session_id):
-        """陪审员在检查点提交阶段性预判 / 发问后，续跑庭审。"""
+        """用户在陪审员或诉讼角色检查点提交内容后，续跑庭审。"""
         data = request.get_json(force=True, silent=True) or {}
         with database.connect() as db:
             row = db.execute("SELECT * FROM court_sessions WHERE id=?", (session_id,)).fetchone()
@@ -437,19 +443,25 @@ def create_app() -> Flask:
         case = court_cases.CASES.get(row["case_id"])
         if not case:
             abort(404, "案例不存在")
-        poll_id = text_value(data, "poll", limit=32)
-        if not any(o["id"] == poll_id for o in case["options"]):
-            abort(400, "请先选择你的阶段性预判")
-        question = text_value(data, "question", limit=MAX_COURT_QUESTION)
-        target = text_value(data, "target", limit=32)
-        if question and target not in ("prosecutor", "defender", "defendant"):
-            abort(400, "发问对象需为公诉人、辩护人或被告人")
+        kind = checkpoint["kind"]
+        if kind == "role_input":
+            statement = text_value(data, "statement", limit=MAX_COURT_STATEMENT)
+            if not 10 <= len(statement) <= MAX_COURT_STATEMENT:
+                abort(400, "角色发言需在 10-500 字之间")
+            payload = {"statement": statement, "stage": checkpoint.get("stage", "")}
+        else:
+            poll_id = text_value(data, "poll", limit=32)
+            if not any(o["id"] == poll_id for o in case["options"]):
+                abort(400, "请先选择你的阶段性预判")
+            question = text_value(data, "question", limit=MAX_COURT_QUESTION)
+            target = text_value(data, "target", limit=32)
+            if question and target not in ("prosecutor", "defender", "defendant"):
+                abort(400, "发问对象需为公诉人、辩护人或被告人")
+            payload = {"poll": poll_id, "question": question, "target": target}
         if not court_llm.configured:
             abort(503, "模拟法庭服务暂不可用，请稍后再试")
         engine = restore_engine(row)
-        kind = checkpoint["kind"]
         next_stage = state["next_stage"]
-        payload = {"poll": poll_id, "question": question, "target": target}
 
         def stream():
             yield sse({"type": "resume", "kind": kind})

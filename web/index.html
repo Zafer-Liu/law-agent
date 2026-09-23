@@ -85,12 +85,41 @@
       <div id="case-cards" class="case-cards"></div>
     </div>
 
+    <!-- 角色选择 -->
+    <div id="court-role-select" class="role-select" hidden>
+      <button id="role-back" class="back-btn" type="button">返回案件列表</button>
+      <span class="section-kicker">选择庭审身份</span>
+      <h2 id="role-case-title"></h2>
+      <p class="muted">不同角色拥有不同任务。诉讼角色将在两个关键节点由你亲自发言，其余回合由 AI 协助推进。</p>
+      <div class="role-options" aria-label="庭审角色">
+        <button class="role-option" type="button" aria-pressed="false" data-role="juror">
+          <span class="role-sigil" aria-hidden="true">陪</span>
+          <span class="role-copy"><strong>人民陪审员</strong><small>观察控辩、两次预判、当庭发问并参与最终评议</small></span>
+          <span class="role-tag">完整体验</span>
+        </button>
+        <button class="role-option" type="button" aria-pressed="false" data-role="prosecutor">
+          <span class="role-sigil" aria-hidden="true">诉</span>
+          <span class="role-copy"><strong>公诉人</strong><small>提交举证意见与最终公诉意见，主张依法追诉</small></span>
+        </button>
+        <button class="role-option" type="button" aria-pressed="false" data-role="defender">
+          <span class="role-sigil" aria-hidden="true">辩</span>
+          <span class="role-copy"><strong>辩护人</strong><small>提出质证意见与最终辩护意见，论证正当防卫</small></span>
+        </button>
+        <button class="role-option" type="button" aria-pressed="false" data-role="defendant">
+          <span class="role-sigil" aria-hidden="true">被</span>
+          <span class="role-copy"><strong>被告人</strong><small>依据卷宗补充事实陈述，并亲自完成最后陈述</small></span>
+        </button>
+      </div>
+      <button id="role-start" class="primary-btn role-start" type="button" disabled>选择角色后开始庭审</button>
+    </div>
+
     <!-- 庭审进行（法庭式布局） -->
     <div id="court-trial" class="court-trial" hidden>
       <div class="court-header">
         <div class="court-header-row">
           <h2 id="court-title"></h2>
           <span id="court-phase" class="phase-badge"></span>
+          <span id="court-player-role" class="player-role-badge"></span>
           <button id="court-exit" class="text-btn" type="button">退出本次模拟</button>
         </div>
         <ol id="phase-steps" class="phase-steps">
@@ -180,8 +209,8 @@
 
     <!-- 评议表单 -->
     <div id="court-deliberation" class="deliberation" hidden>
-      <h2>休庭评议</h2>
-      <p class="muted">作为人民陪审员，请根据庭审查明的事实与法律，独立作出你的评议。</p>
+      <h2 id="deliberation-title">休庭评议</h2>
+      <p id="deliberation-intro" class="muted">作为人民陪审员，请根据庭审查明的事实与法律，独立作出你的评议。</p>
       <div id="delib-traj" class="delib-traj" hidden></div>
       <form id="deliberation-form">
         <div id="deliberation-options" class="delib-options"></div>
