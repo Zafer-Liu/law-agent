@@ -64,8 +64,6 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
   height: 2px; background: var(--primary); border-radius: 1px;
 }
 
-.backend-badge { margin-left: auto; font-size: 11px; color: var(--text-muted); background: #f5f0ec; padding: 5px 10px; border-radius: 6px; }
-
 /* ---- Tab 面板 ---- */
 .tab-panel { display: none; flex: 1; padding: clamp(20px, 3vw, 40px) 24px; max-width: var(--page-max); width: 100%; margin: 0 auto; }
 .tab-panel.active { display: block; }
@@ -430,7 +428,7 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 }
 @media (max-width: 520px) {
   .topbar { height: auto; min-height: 60px; flex-wrap: wrap; padding: 8px 14px; gap: 6px 12px; }
-  .brand-name small, .backend-badge { display: none; }
+  .brand-name small { display: none; }
   .tabs { order: 3; flex-basis: 100%; }
   .tab { min-height: 44px; flex: 1; }
   .court-header-row { align-items: flex-start; flex-wrap: wrap; }

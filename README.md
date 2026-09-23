@@ -47,9 +47,13 @@ legalweb/          # Python 后端包
   llm.py           # OpenAI 兼容客户端
   qa.py            # 法律问答（RAG + 引用校验）
   courtroom/       # 模拟法庭
-    cases.py       # 卷宗数据 + 种子案例
+    cases.py       # 从内置资产加载并校验模拟法庭案例
     agents.py      # 角色卡（公诉人/辩护人/被告人/书记员）
     engine.py      # 庭审状态机 + SSE 事件流
+assset/
+  law/             # 法律问答内置法条
+  case/            # 法律问答内置判例
+  moot-court/      # 模拟法庭案例 JSON
 web/               # 前端（原生 HTML/JS/CSS）
 seed/              # 种子法律知识库（法条节选）
 ```
