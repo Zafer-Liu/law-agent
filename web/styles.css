@@ -423,8 +423,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
   .juror-bench, .clerk-chip { justify-self: center; }
 }
 @media (max-width: 768px) {
-  .qa-layout { flex-direction: column; min-height: 0; gap: 18px; }
-  .messages { min-height: 42vh; }
+  .qa-layout { flex-direction: column; min-height: 0; height: calc(100dvh - 100px); gap: 18px; }
+  .chat-area { min-height: 0; }
+  .messages { min-height: 0; }
   .messages:has(> .welcome:only-child) { justify-content: flex-start; }
   .welcome, .court-select { padding: 24px 0; }
   .welcome h2, .court-select h2 { font-size: 1.75rem; }
@@ -437,10 +438,13 @@ button:active:not(:disabled) { transform: translateY(1px); }
   .tab-panel { padding: 16px; }
 }
 @media (max-width: 520px) {
-  .topbar { height: auto; min-height: 60px; flex-wrap: wrap; padding: 8px 14px; gap: 6px 12px; }
+  .topbar { height: auto; min-height: 60px; flex-wrap: nowrap; padding: 8px 12px; gap: 8px; }
+  .brand { gap: 8px; }
+  .brand-mark { width: 34px; height: 34px; font-size: 17px; }
+  .brand-name { font-size: 16px; }
   .brand-name small { display: none; }
-  .tabs { order: 3; flex-basis: 100%; }
-  .tab { min-height: 44px; flex: 1; }
+  .tabs { flex: 1; min-width: 0; }
+  .tab { min-height: 40px; padding: 6px 8px; flex: 1; font-size: 12px; }
   .court-header-row { align-items: flex-start; flex-wrap: wrap; }
   .text-btn { margin-left: 0; }
   .composer-bottom { align-items: flex-end; gap: 12px; }
