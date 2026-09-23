@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c8281e">
+  <title>法晓 · AI 法律助手</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">法</span>
+      <span class="brand-name">法晓<small>AI 法律助手</small></span>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="主要功能">
+      <button id="tab-button-qa" class="tab active" data-tab="qa" role="tab"
+        aria-selected="true" aria-controls="tab-qa">法律问答</button>
+      <button id="tab-button-court" class="tab" data-tab="court" role="tab"
+        aria-selected="false" aria-controls="tab-court">模拟法庭</button>
+    </nav>
+    <span id="backend-badge" class="backend-badge" title="当前检索通道"></span>
+  </header>
+
+  <!-- ==================== 法律问答 Tab ==================== -->
+  <main id="tab-qa" class="tab-panel active" role="tabpanel" aria-labelledby="tab-button-qa">
+    <div class="qa-layout">
+      <section class="chat-area">
+        <div id="qa-messages" class="messages" aria-live="polite">
+          <div class="welcome">
+            <h2>把事情说清楚，再找法律依据</h2>
+            <p>面向日常民事、合同与刑事问题的引用式问答。每个回答只基于本地法律资料，并标出可核对的依据。</p>
+            <aside class="safety-callout" aria-label="紧急求助提示">
+              <strong>如果眼下有人身危险：</strong>请先拨打 110。本工具用于普法与资料检索，不能替代紧急求助或个案法律服务。
+            </aside>
+            <div class="question-groups" aria-label="常见问题示例">
+              <section class="question-group">
+                <h3>民事关系</h3>
+                <div class="quick-questions">
+                  <button class="quick-btn" data-q="我的合法权益受到侵害时，可以主张哪些民事责任？">权益受侵害怎么办？</button>
+                  <button class="quick-btn" data-q="民事活动中公平原则有什么作用？">什么是公平原则？</button>
+                </div>
+              </section>
+              <section class="question-group">
+                <h3>合同纠纷</h3>
+                <div class="quick-questions">
+                  <button class="quick-btn" data-q="口头约定是否可以成立合同？">口头约定有效吗？</button>
+                  <button class="quick-btn" data-q="对方不按约付款或交付，我可以主张什么？">对方违约怎么办？</button>
+                </div>
+              </section>
+              <section class="question-group">
+                <h3>刑事法律</h3>
+                <div class="quick-questions">
+                  <button class="quick-btn" data-q="什么是正当防卫？构成要件是什么？">什么是正当防卫？</button>
+                  <button class="quick-btn" data-q="出借银行卡给别人用有什么法律风险？">出借银行卡的风险</button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <form id="qa-form" class="composer">
+          <label class="sr-only" for="qa-input">输入你的法律问题</label>
+          <textarea id="qa-input" rows="2" maxlength="2000" placeholder="例如：对方不按约付款，我可以主张什么？" required></textarea>
+          <div class="composer-bottom">
+            <span class="disclaimer">回答仅供参考，不构成法律意见</span>
+            <button type="submit" id="qa-send" class="send-btn" disabled>提问 ↗</button>
+          </div>
+        </form>
+      </section>
+      <aside id="qa-citations" class="citations-panel" hidden>
+        <div class="citations-head">
+          <h3>引用法条</h3>
+          <button id="citations-close" class="close-btn" aria-label="关闭">×</button>
+        </div>
+        <div id="citations-list" class="citations-list"></div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- ==================== 模拟法庭 Tab ==================== -->
+  <main id="tab-court" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-court">
+    <!-- 案例选择 -->
+    <div id="court-select" class="court-select">
+      <h2>选择案件，开始庭审</h2>
+      <p class="muted">选择案件即可入庭。你将以人民陪审员身份观察控辩双方的多智能体对抗、两次作出预判，并在最后与裁判思路对照。</p>
+      <p class="court-safety">完整体验约 10 分钟；中途可退出，庭审记录不会影响下一次体验。</p>
+      <div id="case-cards" class="case-cards"></div>
+    </div>
+
+    <!-- 庭审进行（法庭式布局） -->
+    <div id="court-trial" class="court-trial" hidden>
+      <div class="court-header">
+        <div class="court-header-row">
+          <h2 id="court-title"></h2>
+          <span id="court-phase" class="phase-badge"></span>
+          <button id="court-exit" class="text-btn" type="button">退出本次模拟</button>
+        </div>
+        <ol id="phase-steps" class="phase-steps">
+          <li data-phase="opening">开庭</li>
+          <li data-phase="investigation">法庭调查</li>
+          <li data-phase="debate">法庭辩论</li>
+          <li data-phase="statement">最后陈述</li>
+          <li data-phase="deliberation">评议宣判</li>
+        </ol>
+      </div>
+
+      <div class="courtroom-wrap">
+        <!-- 法庭场景 -->
+        <section class="court-scene">
+          <div class="scene-top">
+            <div class="bench juror-bench" data-role="juror">
+              <span class="emblem">🕵️</span>
+              <div class="bench-name">陪审席<small>你 · 人民陪审员</small></div>
+            </div>
+            <div class="bench judge-bench" data-role="judge">
+              <span class="emblem">⚖️</span>
+              <div class="bench-name">审判席<small>审判长</small></div>
+            </div>
+            <div class="bench clerk-chip" data-role="clerk">
+              <span class="emblem">📝</span>
+              <div class="bench-name">书记员</div>
+            </div>
+          </div>
+
+          <div class="scene-mid">
+            <div class="bench side-bench prosecutor-bench" data-role="prosecutor">
+              <span class="emblem">📂</span>
+              <div class="bench-name">公诉人席</div>
+            </div>
+            <div class="speech-zone">
+              <div class="speech-plate">
+                <span id="speech-badge">⚖️</span>
+                <span id="speech-name">审判长</span>
+              </div>
+              <div id="speech-text" class="speech-text">法槌即将落下，庭审马上开始…</div>
+            </div>
+            <div class="bench side-bench defender-bench" data-role="defender">
+              <span class="emblem">🛡️</span>
+              <div class="bench-name">辩护人席</div>
+            </div>
+          </div>
+
+          <div class="scene-bottom">
+            <div class="bench defendant-bench" data-role="defendant">
+              <span class="emblem">🧑</span>
+              <div class="bench-name">被告人<small>陈明</small></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 卷宗面板 -->
+        <aside class="dossier-panel">
+          <details class="facts-card" open>
+            <summary>📰 起诉书指控（案情摘要）</summary>
+            <p id="facts-text"></p>
+          </details>
+          <div class="dossier-block">
+            <h3>🗂 本案争点</h3>
+            <ul id="dispute-list" class="dispute-list"></ul>
+          </div>
+          <div class="dossier-block">
+            <h3>📋 卷宗证据<small>发言中提到的证据会自动点亮；点卡片展开，点 ☆ 标注关键证据</small></h3>
+            <div id="evidence-list" class="evidence-list"></div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- 检查点：陪审员预判与发问 -->
+      <div id="checkpoint-panel" class="checkpoint-panel" hidden></div>
+
+      <!-- 庭审记录 -->
+      <details class="court-log">
+        <summary>📖 庭审记录（点击展开回看全部发言）</summary>
+        <div id="court-log-list" class="court-log-list"></div>
+      </details>
+
+      <div id="court-status" class="court-status" hidden>
+        <span class="typing-indicator">●●●</span>
+        <span id="court-status-text"></span>
+      </div>
+    </div>
+
+    <!-- 评议表单 -->
+    <div id="court-deliberation" class="deliberation" hidden>
+      <h2>⚖️ 休庭评议</h2>
+      <p class="muted">作为人民陪审员，请根据庭审查明的事实与法律，独立作出你的评议。</p>
+      <div id="delib-traj" class="delib-traj" hidden></div>
+      <form id="deliberation-form">
+        <div id="deliberation-options" class="delib-options"></div>
+        <div id="deliberation-years" class="delib-years" hidden>
+          <label>量刑建议（有期徒刑）<span id="years-display">10</span> 年</label>
+          <input type="range" id="years-slider" min="0" max="15" value="10" step="1">
+          <div class="years-range"><span id="years-min"></span><span id="years-max"></span></div>
+        </div>
+        <button type="submit" class="primary-btn" id="deliberation-submit">提交评议</button>
+      </form>
+    </div>
+
+    <!-- 判决对照 -->
+    <div id="court-verdict" class="verdict" hidden>
+      <h2>📜 宣判对照</h2>
+      <div id="verdict-trajectory" class="verdict-trajectory" hidden></div>
+      <div class="verdict-cards">
+        <div class="verdict-card yours">
+          <h3>你的评议</h3>
+          <p id="verdict-yours"></p>
+        </div>
+        <div class="verdict-card real">
+          <h3>法院判决</h3>
+          <p id="verdict-real"></p>
+        </div>
+      </div>
+      <div class="verdict-reasoning">
+        <h3>裁判理由</h3>
+        <p id="verdict-reasoning"></p>
+        <h3>相关法条</h3>
+        <p id="verdict-articles"></p>
+      </div>
+      <div id="verdict-analysis" class="verdict-analysis">
+        <h3>⚖️ 审判长复盘</h3>
+        <div id="analysis-content" class="analysis-content"></div>
+      </div>
+      <button id="court-restart" class="outline-btn">再来一局</button>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="/assets/app.js"></script>
+  <script src="/assets/court.js"></script>
+</body>
+</html>

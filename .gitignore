@@ -1,0 +1,14 @@
+# Secrets and local runtime data
+.env
+.law-data/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
