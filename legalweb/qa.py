@@ -20,9 +20,16 @@ class Evidence:
     """检索命中 → 证据引用（C1..Cn）。"""
 
     def __init__(self, hits):
-        self.refs = [{"label": f"C{i}", "chunk_id": hit["id"], "section": hit["section"],
-                      "ordinal": hit["ordinal"], "excerpt": hit["text"]}
-                     for i, hit in enumerate(hits, 1)]
+        self.refs = []
+        for index, hit in enumerate(hits, 1):
+            source = hit.get("source_title", "")
+            section = hit["section"]
+            display_section = source if section == "正文" else " / ".join(
+                part for part in (source, section) if part
+            )
+            self.refs.append({"label": f"C{index}", "chunk_id": hit["id"],
+                              "section": display_section, "ordinal": hit["ordinal"],
+                              "excerpt": hit["text"]})
 
     @property
     def valid_labels(self):

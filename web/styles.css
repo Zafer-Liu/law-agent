@@ -79,11 +79,6 @@ button:focus-visible, textarea:focus-visible, summary:focus-visible {
 .welcome { max-width: 760px; text-align: left; padding: clamp(24px, 5vw, 64px) 0; }
 .welcome h2 { font-size: clamp(28px, 4vw, 42px); line-height: 1.2; letter-spacing: -.02em; margin-bottom: 14px; color: var(--text); }
 .welcome > p { max-width: 620px; color: var(--text-muted); margin-bottom: 24px; font-size: 15px; line-height: 1.75; }
-.safety-callout {
-  max-width: 680px; margin: 0 0 28px; padding: 12px 14px; text-align: left;
-  color: #713f12; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 10px;
-  font-size: 13px; line-height: 1.65;
-}
 .question-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin-top: 34px; }
 .question-group { border-top: 1px solid var(--border); padding-top: 14px; }
 .question-group h3 { color: var(--text); font-size: 14px; margin-bottom: 10px; }

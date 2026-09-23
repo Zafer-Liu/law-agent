@@ -1,5 +1,6 @@
 """Flask 应用：静态页面、法律问答 SSE、知识库管理、模拟法庭 SSE。"""
 
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,12 @@ from .rag import EmbeddingClient, retrieve, terms, tokenize
 LOG = logging.getLogger("legalweb")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
+ASSET_DIR = Path(__file__).resolve().parent.parent / "assset"
+BUILTIN_KB_DIRS = (
+    (SEED_DIR, ""),
+    (ASSET_DIR / "law", "法条"),
+    (ASSET_DIR / "case", "判例"),
+)
 
 MAX_QUESTION = 2000
 MAX_COURT_QUESTION = 200
@@ -77,23 +84,42 @@ def index_document(database: Database, embedder: EmbeddingClient,
             "chunk_count": len(chunks), "vector_indexed": bool(embeddings)}
 
 
+def builtin_documents():
+    """Yield unique built-in RAG documents from seed, law and case folders."""
+    candidates = []
+    for directory, category in BUILTIN_KB_DIRS:
+        if not directory.exists():
+            continue
+        for path in directory.rglob("*"):
+            if path.is_file() and path.suffix.lower() in FORMATS:
+                candidates.append((path, category))
+    candidates.sort(key=lambda item: (" (1)" in item[0].stem, str(item[0])))
+    seen_digests = set()
+    for path, category in candidates:
+        if path.stem.startswith("NOTES-"):
+            continue
+        digest = hashlib.sha256(path.read_bytes()).digest()
+        if digest in seen_digests:
+            LOG.info("skip duplicate built-in source %s", path.name)
+            continue
+        seen_digests.add(digest)
+        title = f"{category} · {path.stem}" if category else path.stem
+        yield path, title[:120]
+
+
 def seed_sources(database: Database, embedder: EmbeddingClient):
-    """首次启动把 seed/ 下的法条文件灌入知识库（按标题幂等）。"""
-    if not SEED_DIR.exists():
-        return
+    """Idempotently index the bundled legal provisions and precedent corpus."""
     with database.connect() as db:
         for title in RETIRED_SEED_TITLES:
             db.execute("DELETE FROM sources WHERE title=?", (title,))
         existing = {row["title"] for row in db.execute("SELECT title FROM sources")}
-    for path in sorted(SEED_DIR.glob("*.md")):
-        # NOTES-* 是内部工作文档（校对清单等），不是法律资料，不入知识库
-        if path.stem.startswith("NOTES-"):
-            continue
-        if path.stem in existing:
+    for path, title in builtin_documents():
+        if title in existing:
             continue
         try:
-            summary = index_document(database, embedder, path, path.name, path.stem)
-            LOG.info("seeded knowledge source %s (%d chunks)", path.stem, summary["chunk_count"])
+            summary = index_document(database, embedder, path, path.name, title)
+            existing.add(title)
+            LOG.info("seeded knowledge source %s (%d chunks)", title, summary["chunk_count"])
         except ValueError as exc:
             LOG.warning("seed %s failed: %s", path.name, exc)
 
@@ -156,7 +182,10 @@ def create_app() -> Flask:
 
     def _load_chunks() -> list[dict]:
         with database.connect() as db:
-            rows = db.execute("SELECT * FROM chunks ORDER BY source_id, ordinal").fetchall()
+            rows = db.execute(
+                "SELECT c.*, s.title AS source_title FROM chunks c "
+                "JOIN sources s ON s.id=c.source_id ORDER BY c.source_id, c.ordinal"
+            ).fetchall()
         chunks = []
         for row in rows:
             chunk = dict(row)
