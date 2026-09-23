@@ -12,7 +12,7 @@ DOSSIER_RULE = """【硬性纪律】
 
 ROLES = {
     "prosecutor": {
-        "key": "prosecutor", "name": "公诉人", "badge": "📂",
+        "key": "prosecutor", "name": "公诉人", "badge": "诉",
         "temperature": 0.3,
         "system": (
             "你是海城市人民检察院的公诉人，出庭支持公诉，指控被告人陈明犯故意伤害罪。\n"
@@ -22,7 +22,7 @@ ROLES = {
             "表达：每次发言不超过160字，至多两个自然段。\n" + DOSSIER_RULE),
     },
     "defender": {
-        "key": "defender", "name": "辩护人", "badge": "🛡️",
+        "key": "defender", "name": "辩护人", "badge": "辩",
         "temperature": 0.45,
         "system": (
             "你是被告人陈明的辩护律师，为陈明作无罪辩护，主张其行为构成正当防卫（特殊防卫）。\n"
@@ -33,7 +33,7 @@ ROLES = {
             "表达：每次发言不超过160字，至多两个自然段。\n" + DOSSIER_RULE),
     },
     "defendant": {
-        "key": "defendant", "name": "被告人", "badge": "🧑",
+        "key": "defendant", "name": "被告人", "badge": "被",
         "temperature": 0.6,
         "system": (
             "你在庭审中是被告人陈明（34岁，外卖骑手，初犯，认罪态度好但坚称自己是被迫还手）。\n"
@@ -42,14 +42,14 @@ ROLES = {
             "表达：每次发言不超过100字。\n" + DOSSIER_RULE),
     },
     "clerk": {
-        "key": "clerk", "name": "书记员", "badge": "📝",
+        "key": "clerk", "name": "书记员", "badge": "书",
         "temperature": 0.2,
         "system": (
             "你是法庭书记员。把给定的庭审内容压缩成不超过60字的客观纪要：谁、就什么证据或争点、"
             "说了什么核心意思。不带评价，不新增信息，不使用列表。\n" + DOSSIER_RULE),
     },
     "judge_review": {
-        "key": "judge_review", "name": "审判长", "badge": "⚖️",
+        "key": "judge_review", "name": "审判长", "badge": "审",
         "temperature": 0.25,
         "system": (
             "你是本案审判长，合议庭评议后向人民陪审员复盘案件。只能依据：卷宗、庭审记录、"
@@ -61,4 +61,4 @@ ROLES = {
 }
 
 # 审判长的程序性台词是纯代码模板，不经模型生成——程序正义部分由状态机保证。
-JUDGE_BADGE = "⚖️"
+JUDGE_BADGE = "审"

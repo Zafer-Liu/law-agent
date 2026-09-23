@@ -89,7 +89,7 @@ class TrialEngine:
         last_error = None
         for attempt in range(3):
             try:
-                # 8000 预算：MiniMax-M3 的 think 与回答共享额度，过小会导致可见输出为空
+                # M2.x 的隐藏推理与可见回答共享预算，过小会导致正文为空。
                 text = self.llm.complete(messages, temperature=role["temperature"], max_tokens=8000)
                 break
             except LLMError as exc:
@@ -273,7 +273,6 @@ class TrialEngine:
         trajectory = [{"stage": p["stage"], "label": p["label"]} for p in self.polls]
         yield {"type": "verdict", "real": verdict, "yours": deliberation,
                "trajectory": trajectory}
-        option = next(o for o in case["options"] if o["id"] == deliberation["option_id"])
         jury_text = deliberation["label"]
         if deliberation.get("convict"):
             jury_text += f"；量刑意见：{deliberation['years']} 年"

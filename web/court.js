@@ -49,10 +49,10 @@
           <div class="theme">${escapeHtml(c.theme)}</div>
           <div class="learning-goal">你将学会：${escapeHtml(c.learning_goal || "分析案件中的关键事实与规则")}</div>
           <div class="charge">指控罪名：${escapeHtml(c.charge)}</div>
-          <div class="duration">⏱ ${escapeHtml(c.duration)}</div>
+          <div class="duration">预计用时 ${escapeHtml(c.duration)}</div>
           <div class="entry-note">${escapeHtml(c.entry_note || "选择后即可开始模拟庭审")}</div>
           <div class="disclaimer">${escapeHtml(c.disclaimer)}</div>
-          <span class="case-action">开始模拟 →</span>
+          <span class="case-action">进入法庭</span>
         `;
         card.addEventListener("click", () => loadCase(c.id));
         caseCardsEl.appendChild(card);
@@ -96,7 +96,7 @@
     checkpointPanel.innerHTML = "";
     logList.innerHTML = "";
     speechName.textContent = "审判长";
-    speechBadge.textContent = "⚖️";
+    speechBadge.textContent = "审";
     speechTextEl.textContent = "法槌即将落下，庭审马上开始…";
     setPhaseStep("");
     document.querySelectorAll(".court-scene .bench").forEach((b) => b.classList.remove("speaking"));
@@ -120,7 +120,7 @@
         <div class="ev-head">
           <span class="ev-id">${escapeHtml(ev.id)}</span>
           <span class="ev-type">${escapeHtml(ev.type)}</span>
-          <button type="button" class="ev-star" title="标注为关键证据">☆</button>
+          <button type="button" class="ev-star" aria-label="标注为关键证据" aria-pressed="false">☆</button>
         </div>
         <div class="ev-body">${escapeHtml(ev.content)}</div>
       `;
@@ -128,15 +128,18 @@
         if (e.target.closest(".ev-star")) return;
         card.classList.toggle("open");
       });
-      card.querySelector(".ev-star").addEventListener("click", () => {
+      card.querySelector(".ev-star").addEventListener("click", (event) => {
+        const star = event.currentTarget;
         if (markedEvidence.has(ev.id)) {
           markedEvidence.delete(ev.id);
           card.classList.remove("marked");
-          card.querySelector(".ev-star").textContent = "☆";
+          star.textContent = "☆";
+          star.setAttribute("aria-pressed", "false");
         } else {
           markedEvidence.add(ev.id);
           card.classList.add("marked");
-          card.querySelector(".ev-star").textContent = "★";
+          star.textContent = "★";
+          star.setAttribute("aria-pressed", "true");
           toast(`已标注 ${ev.id} 为关键证据`);
         }
       });
@@ -224,7 +227,7 @@
         break;
 
       case "summary":
-        setSpeech("clerk", "书记员", "📝", `（书记员纪要）${event.text}`);
+        setSpeech("clerk", "书记员", "书", `（书记员纪要）${event.text}`);
         appendLog("clerk", "书记员", event.text);
         break;
 
@@ -316,7 +319,7 @@
 
   // ---- 检查点：阶段性预判与发问 ----
   function renderCheckpoint(cp) {
-    setSpeaking("juror", "人民陪审员（你）", "🕵️");
+    setSpeaking("juror", "人民陪审员（你）", "陪");
     speechTextEl.textContent = cp.kind === "mid_review"
       ? "轮到你了——请在下方记录你的阶段性预判，还可以就卷宗证据向控辩双方发问。"
       : "听完控辩双方的对抗，请再次记录你的意见。";
@@ -329,7 +332,7 @@
         <span class="cp-opt-detail">${escapeHtml(opt.detail)}</span>
       </button>`).join("");
     card.innerHTML = `
-      <div class="cp-title">🗣 审判长征求你的意见</div>
+      <div class="cp-title">审判长征求你的意见</div>
       <p class="cp-quote">“${cp.kind === "mid_review"
         ? "法庭调查结束。请陪审员记录阶段性意见，并可就卷宗证据向控辩双方发问。"
         : "听完控辩双方的对抗，你的判断是否发生了变化？请再次记录你的意见。"}”</p>

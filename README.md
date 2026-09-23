@@ -23,7 +23,10 @@ python -m legalweb
 |---|---|
 | `LAW_LLM_BASE_URL` | OpenAI 兼容接口地址（以 /v1 结尾） |
 | `LAW_LLM_API_KEY` | API Key |
-| `LAW_LLM_MODEL` | 模型名称 |
+| `LAW_LLM_MODEL` | 法律问答模型，默认 `MiniMax-M3` |
+| `LAW_COURT_LLM_BASE_URL` | 模拟法庭的 OpenAI 兼容接口地址 |
+| `LAW_COURT_LLM_API_KEY` | 模拟法庭 API Key |
+| `LAW_COURT_LLM_MODEL` | 模拟法庭模型，默认 `MiniMax-M2.7-highspeed` |
 | `LAW_EMBED_BASE_URL` | （可选）向量服务地址，配置后启用语义检索 |
 | `LAW_EMBED_API_KEY` | （可选）向量服务 Key |
 | `TYPESAFE_API_KEY` | （可选）TypeSafe API Key，配置后启用 Jev 检索质量门控 |

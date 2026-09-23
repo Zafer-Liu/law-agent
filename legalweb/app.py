@@ -9,7 +9,15 @@ from itertools import zip_longest
 from pathlib import Path
 from threading import Lock
 
-from flask import Flask, Response, abort, jsonify, request, send_from_directory, stream_with_context
+from flask import (
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    request,
+    send_from_directory,
+    stream_with_context,
+)
 
 from . import qa
 from .courtroom import cases as court_cases
@@ -136,10 +144,13 @@ def create_app() -> Flask:
     uploads_dir = data_root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     embedder = EmbeddingClient()
-    llm = LLMClient()
+    qa_llm = LLMClient("LAW_LLM")
+    court_llm = LLMClient("LAW_COURT_LLM")
     seed_sources(database, embedder)
-    if not llm.configured:
-        LOG.warning("LLM 未配置：请设置 LAW_LLM_BASE_URL / LAW_LLM_API_KEY / LAW_LLM_MODEL")
+    if not qa_llm.configured:
+        LOG.warning("法律问答模型未配置：请设置 LAW_LLM_* 环境变量")
+    if not court_llm.configured:
+        LOG.warning("模拟法庭模型未配置：请设置 LAW_COURT_LLM_* 环境变量")
 
     # ------------------------------------------------------------------
     # 静态页面
@@ -158,7 +169,8 @@ def create_app() -> Flask:
 
     @app.get("/api/config")
     def config():
-        return jsonify({"llm_configured": llm.configured,
+        return jsonify({"llm_configured": qa_llm.configured,
+                        "court_llm_configured": court_llm.configured,
                         "embed_configured": embedder.configured,
                         "jev_configured": jev_configured(),
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
@@ -264,8 +276,8 @@ def create_app() -> Flask:
         conversation_id = text_value(data, "conversation_id", limit=128)
         if not 2 <= len(question) <= MAX_QUESTION:
             abort(400, "问题长度需在 2-2000 字之间")
-        if not llm.configured:
-            abort(503, "尚未配置模型服务，请设置 LAW_LLM_* 环境变量")
+        if not qa_llm.configured:
+            abort(503, "智能服务暂不可用，请稍后再试")
         with database.connect() as db:
             if conversation_id:
                 found = db.execute("SELECT id FROM conversations WHERE id=?",
@@ -306,7 +318,7 @@ def create_app() -> Flask:
             yield sse({"type": "status", "text": "正在生成回答…", "backend": retrieval["backend"]})
             buffer = []
             try:
-                for kind, piece in llm.stream(messages, temperature=0.15, max_tokens=3000):
+                for kind, piece in qa_llm.stream(messages, temperature=0.15, max_tokens=3000):
                     if kind == "delta":
                         buffer.append(piece)
                         yield sse({"type": "delta", "text": piece})
@@ -360,7 +372,7 @@ def create_app() -> Flask:
         case = court_cases.CASES.get(row["case_id"])
         if not case:
             abort(404, "案例不存在")
-        engine = TrialEngine(case, llm)
+        engine = TrialEngine(case, court_llm)
         engine.transcript = json.loads(row["transcript"] or "[]")
         engine.load_state(json.loads(row["state"] or "null"))
         return engine
@@ -385,10 +397,10 @@ def create_app() -> Flask:
         case = court_cases.CASES.get(case_id)
         if not case:
             abort(404, "案例不存在")
-        if not llm.configured:
-            abort(503, "尚未配置模型服务，请设置 LAW_LLM_* 环境变量")
+        if not court_llm.configured:
+            abort(503, "模拟法庭服务暂不可用，请稍后再试")
         session_id = new_id()
-        engine = TrialEngine(case, llm)
+        engine = TrialEngine(case, court_llm)
 
         def stream():
             yield sse({"type": "session", "session_id": session_id, "case_id": case_id})
@@ -432,8 +444,8 @@ def create_app() -> Flask:
         target = text_value(data, "target", limit=32)
         if question and target not in ("prosecutor", "defender", "defendant"):
             abort(400, "发问对象需为公诉人、辩护人或被告人")
-        if not llm.configured:
-            abort(503, "尚未配置模型服务，请设置 LAW_LLM_* 环境变量")
+        if not court_llm.configured:
+            abort(503, "模拟法庭服务暂不可用，请稍后再试")
         engine = restore_engine(row)
         kind = checkpoint["kind"]
         next_stage = state["next_stage"]
@@ -453,7 +465,7 @@ def create_app() -> Flask:
                     yield sse(event)
             except LLMError as exc:
                 # 回滚到检查点时刻的干净状态：用户重新提交即可完整重放，不产生重复发言
-                rollback = TrialEngine(case, llm)
+                rollback = TrialEngine(case, court_llm)
                 rollback.transcript = json.loads(row["transcript"] or "[]")
                 rollback.load_state(state)
                 save_court_session(session_id, row["case_id"], rollback,

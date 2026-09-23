@@ -68,7 +68,7 @@
 
     appendMessage("user", question);
     const assistantEl = appendMessage("assistant", "");
-    assistantEl.textContent = "正在思考…";
+    assistantEl.textContent = "正在查找相关依据…";
     const stream = createStreamRenderer(assistantEl);
 
     try {
@@ -80,7 +80,7 @@
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        assistantEl.textContent = "请求失败：" + (err.error || res.statusText);
+        assistantEl.textContent = err.error || "暂时无法回答，请稍后再试。";
         sending = false;
         sendBtn.disabled = false;
         return;
@@ -109,7 +109,7 @@
             conversationId = event.conversation_id || conversationId;
             stream.finish(event);
           } else if (event.type === "error") {
-            stream.fail("出错了：" + event.error);
+            stream.fail(event.error || "暂时无法回答，请稍后再试。");
           }
         }
       }

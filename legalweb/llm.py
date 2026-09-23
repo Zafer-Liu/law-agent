@@ -21,7 +21,7 @@ class LLMError(Exception):
 
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, prefix: str = "LAW_LLM"):
         def provider(prefix, token_default):
             base = os.getenv(prefix + "_BASE_URL", "").strip()
             key = os.getenv(prefix + "_API_KEY", "").strip()
@@ -35,10 +35,11 @@ class LLMClient:
                 max_tokens = token_default
             return {"base": base, "key": key, "model": model, "max_tokens": max_tokens, "env": prefix}
 
-        primary = provider("LAW_LLM", 8000)
-        fallback = provider("LAW_LLM_FALLBACK", primary["max_tokens"] if primary else 8000)
+        primary = provider(prefix, 8000)
+        fallback = provider(prefix + "_FALLBACK", primary["max_tokens"] if primary else 8000)
         self.providers = [item for item in (primary, fallback) if item]
         self.configured = bool(self.providers)
+        self.prefix = prefix
 
     def _headers(self, provider):
         return {"Authorization": "Bearer " + provider["key"]} if provider["key"] else {}
@@ -47,12 +48,10 @@ class LLMClient:
     def _content(message) -> str:
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            # 推理模型预算耗尽时 content 可能为空，答案落在 reasoning_content。
-            content = message.get("reasoning_content")
-        if not isinstance(content, str) or not content.strip():
             raise ValueError("empty model content")
-        # 清理推理模型的 <think> 标签
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+        # 推理内容永不作为答案返回；仅保留 <think> 标签之后的可见正文。
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        content = re.sub(r"<think>.*$", "", content, flags=re.DOTALL).strip()
         if not content:
             raise ValueError("empty model content after think filter")
         return content
@@ -60,7 +59,7 @@ class LLMClient:
     def complete(self, messages, temperature=0.2, max_tokens=2000) -> str:
         """一次普通非流式调用，带备用模型回退。"""
         if not self.providers:
-            raise LLMError("尚未配置模型服务，请设置 LAW_LLM_BASE_URL、LAW_LLM_API_KEY 和 LAW_LLM_MODEL。")
+            raise LLMError("智能服务暂不可用，请稍后再试。")
         failure = None
         for provider in self.providers:
             payload = {"model": provider["model"], "messages": messages,
@@ -76,7 +75,7 @@ class LLMClient:
             except (requests.RequestException, ValueError, KeyError, TypeError, IndexError) as exc:
                 failure = exc
                 LOG.warning("LLM %s complete failed: %s: %s", provider["env"], type(exc).__name__, exc)
-        raise LLMError("模型调用失败，请检查模型配置后重试。") from failure
+        raise LLMError("智能服务暂时繁忙，请稍后再试。") from failure
 
     def stream(self, messages, temperature=0.2, max_tokens=2000):
         """流式调用：先产出 ("delta", text) 增量，结束产出 ("content", 全文)。
@@ -84,7 +83,7 @@ class LLMClient:
         首个 delta 之前失败可切换备用模型；之后失败直接抛 LLMError。
         """
         if not self.providers:
-            raise LLMError("尚未配置模型服务，请设置 LAW_LLM_BASE_URL、LAW_LLM_API_KEY 和 LAW_LLM_MODEL。")
+            raise LLMError("智能服务暂不可用，请稍后再试。")
         for index, provider in enumerate(self.providers):
             emitted = [False]
             try:
@@ -163,15 +162,14 @@ class LLMClient:
                         emitted[0] = True
                         yield ("delta", piece)
                         continue
-                    if think_done is False:
+                    if think_done is False and "</think>" in buffer:
                         # 检查是否包含完整的 <think>...</think>
-                        if "</think>" in buffer:
-                            after = buffer.split("</think>", 1)[1]
-                            think_done = True
-                            if after.strip():
-                                emitted[0] = True
-                                yield ("delta", after)
-                            buffer = ""
+                        after = buffer.split("</think>", 1)[1]
+                        think_done = True
+                        if after.strip():
+                            emitted[0] = True
+                            yield ("delta", after)
+                        buffer = ""
 
                 # EOF handling below distinguishes a harmless partial tag from
                 # an unterminated hidden-thinking block.
@@ -188,8 +186,8 @@ class LLMClient:
         except (ValueError, KeyError, TypeError, IndexError) as exc:
             raise LLMError("模型输出无效，请重试。") from exc
         # 清理最终内容中的 think 标签
-        content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
-        content = re.sub(r"<think>.*$", "", content, flags=re.S).strip()
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content = re.sub(r"<think>.*$", "", content, flags=re.DOTALL).strip()
         if not content:
             raise LLMError("模型输出无有效正文，请重试。")
         return content
