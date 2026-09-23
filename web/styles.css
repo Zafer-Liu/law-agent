@@ -24,7 +24,7 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { color-scheme: light; }
-body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden; }
 button, textarea { font: inherit; }
 button:focus-visible, textarea:focus-visible, summary:focus-visible {
   outline: 3px solid var(--focus); outline-offset: 3px;
@@ -424,6 +424,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 }
 @media (max-width: 768px) {
   .qa-layout { flex-direction: column; min-height: 0; height: calc(100dvh - 100px); gap: 18px; }
+  .chat-area, .messages, .composer { width: 100%; max-width: 100%; min-width: 0; }
   .chat-area { min-height: 0; }
   .messages { min-height: 0; }
   .messages:has(> .welcome:only-child) { justify-content: flex-start; }
@@ -444,12 +445,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
   .brand-name { font-size: 16px; }
   .brand-name small { display: none; }
   .tabs { flex: 1; min-width: 0; }
-  .tab { min-height: 40px; padding: 6px 8px; flex: 1; font-size: 12px; }
+  .tab { min-width: 0; min-height: 40px; padding: 6px 8px; flex: 1; font-size: 12px; white-space: nowrap; }
   .court-header-row { align-items: flex-start; flex-wrap: wrap; }
   .text-btn { margin-left: 0; }
   .composer-bottom { align-items: flex-end; gap: 12px; }
-  .disclaimer { max-width: 180px; line-height: 1.5; }
-  .send-btn { padding-inline: 16px; }
+  .disclaimer { flex: 1; min-width: 0; max-width: 180px; line-height: 1.5; }
+  .send-btn { flex: 0 0 auto; padding-inline: 16px; }
   .case-card { padding: 22px 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
