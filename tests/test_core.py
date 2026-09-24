@@ -12,7 +12,7 @@ from werkzeug.exceptions import BadRequest
 from legalweb.app import create_app, text_value
 from legalweb.database import Database, new_id, now_iso
 from legalweb.llm import LLMClient
-from legalweb.qa import sanitize_citations
+from legalweb.qa import Evidence, sanitize_citations
 
 
 class FakeResponse:
@@ -104,6 +104,29 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result["content"], "依据[C1]。")
         self.assertEqual(result["used"], ["C1"])
         self.assertEqual(result["removed"], 1)
+
+    def test_evidence_indexes_each_legal_article_separately(self):
+        hits = [{
+            "id": 7, "ordinal": 3, "section": "正文",
+            "source_title": "法条 · 中华人民共和国测试法(FBMCLI.1.123)",
+            "text": "第一条 普通规则。\n第二条 关键合同规则。\n第三条 其他规则。",
+        }]
+        refs = Evidence(hits, "关键合同").refs
+        self.assertEqual([ref["label"] for ref in refs], ["C1", "C2", "C3"])
+        self.assertEqual(refs[0]["article"], "第二条")
+        self.assertEqual(refs[0]["source"], "中华人民共和国测试法")
+        self.assertEqual(refs[0]["excerpt"], "关键合同规则。")
+
+    def test_case_evidence_remains_one_citation(self):
+        hits = [{
+            "id": 8, "ordinal": 1, "section": "正文",
+            "source_title": "判例 · 某合同纠纷案",
+            "text": "裁判理由提到民法典第一条，但这里不应把判例拆成法条。",
+        }]
+        refs = Evidence(hits, "合同纠纷").refs
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["source"], "某合同纠纷案")
+        self.assertEqual(refs[0]["article"], "")
 
     def test_conversation_history_is_scoped_to_browser_identity(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -343,7 +343,7 @@ def create_app() -> Flask:
                                 json.dumps({"grounded": False}), now_iso()))
                 yield sse({"type": "result", **payload})
                 return
-            evidence = qa.Evidence(retrieval["hits"])
+            evidence = qa.Evidence(retrieval["hits"], question)
             messages = qa.build_messages(question, evidence, previous, recent_answers)
             yield sse({"type": "status", "text": "正在生成回答…", "backend": retrieval["backend"]})
             buffer = []

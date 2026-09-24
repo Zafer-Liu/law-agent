@@ -599,14 +599,18 @@
     citationsList.replaceChildren();
     citationsPanelCount.textContent = `${citations.length} 条`;
     citations.forEach((c) => {
+      const sectionParts = String(c.section || "").split(/\s+\/\s+/).filter(Boolean);
+      const article = c.article || sectionParts.find((part) => /第.+条/.test(part)) || "";
+      const source = c.source || sectionParts.filter((part) => part !== article).join(" · ") || "法律资料";
       const item = document.createElement("article");
       item.className = "citation-item";
       item.dataset.label = c.label;
       item.innerHTML = `
         <div class="citation-meta">
-          <span class="label">[${escapeHtml(c.label)}]</span>
-          <span class="section">${escapeHtml(c.section || "法律资料")}</span>
+          <span class="label">${escapeHtml(c.label)}</span>
+          ${article ? `<strong class="article">${escapeHtml(article)}</strong>` : ""}
         </div>
+        <p class="citation-source">${escapeHtml(source)}</p>
         <p class="excerpt">${escapeHtml(c.excerpt || "暂无可展示的原文片段")}</p>
       `;
       citationsList.appendChild(item);
