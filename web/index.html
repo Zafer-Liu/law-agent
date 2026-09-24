@@ -22,12 +22,44 @@
   </header>
 
   <!-- ==================== 法律问答 Tab ==================== -->
-  <main id="tab-qa" class="tab-panel active" role="tabpanel" aria-labelledby="tab-button-qa">
-    <div class="qa-layout">
+  <main id="tab-qa" class="tab-panel qa-panel active" role="tabpanel" aria-labelledby="tab-button-qa">
+    <div class="qa-workspace">
+      <aside id="conversation-sidebar" class="conversation-sidebar" aria-label="对话历史">
+        <div class="conversation-sidebar-head">
+          <button id="new-conversation" class="new-conversation-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 4.75h14a1.25 1.25 0 0 1 1.25 1.25v10A1.25 1.25 0 0 1 19 17.25H9l-4.25 3v-14A1.25 1.25 0 0 1 5 4.75Z"/>
+              <path d="M12.5 8v6M9.5 11h6"/>
+            </svg>
+            <span>新对话</span>
+          </button>
+          <label class="conversation-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.75"/><path d="m15 15 4.25 4.25"/></svg>
+            <span class="sr-only">搜索对话</span>
+            <input id="conversation-search" type="search" placeholder="搜索对话" autocomplete="off">
+          </label>
+        </div>
+        <div class="conversation-list-head">
+          <span>最近对话</span>
+          <span id="conversation-total" class="conversation-total"></span>
+        </div>
+        <div id="conversation-list" class="conversation-list"></div>
+        <p id="conversation-empty" class="conversation-empty">还没有保存的对话</p>
+      </aside>
+
       <section class="chat-area">
+        <header class="chat-head">
+          <button id="conversation-menu" class="workspace-icon-btn conversation-menu" type="button"
+            aria-label="打开对话历史" aria-controls="conversation-sidebar" aria-expanded="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </button>
+          <div class="chat-title-group">
+            <span>法律问答</span>
+            <h2 id="chat-title">新对话</h2>
+          </div>
+        </header>
         <div id="qa-messages" class="messages" aria-live="polite">
           <div class="welcome">
-            <span class="section-kicker">法律问答</span>
             <h2>把事情说清楚，再找法律依据</h2>
             <p>面向日常民事、合同与刑事问题的引用式问答。每个回答只基于本地法律资料，并标出可核对的依据。</p>
             <div class="question-groups" aria-label="常见问题示例">
@@ -55,23 +87,37 @@
             </div>
           </div>
         </div>
-        <form id="qa-form" class="composer">
-          <label class="sr-only" for="qa-input">输入你的法律问题</label>
-          <textarea id="qa-input" rows="2" maxlength="2000" placeholder="例如：对方不按约付款，我可以主张什么？" required></textarea>
-          <div class="composer-bottom">
-            <span class="disclaimer">回答仅供参考，不构成法律意见</span>
-            <button type="submit" id="qa-send" class="send-btn" disabled>发送问题</button>
-          </div>
-        </form>
-      </section>
-      <aside id="qa-citations" class="citations-panel" aria-labelledby="citations-title" hidden>
-        <div class="citations-head">
-          <h3 id="citations-title">引用法条 <span id="citations-count" class="citations-count"></span></h3>
-          <button id="citations-close" class="close-btn" aria-label="关闭">×</button>
+        <div class="composer-dock">
+          <form id="qa-form" class="composer">
+            <label class="sr-only" for="qa-input">输入你的法律问题</label>
+            <textarea id="qa-input" rows="2" maxlength="2000" placeholder="输入你的法律问题…" required></textarea>
+            <div class="composer-bottom">
+              <span class="disclaimer">Enter 发送 · Shift + Enter 换行</span>
+              <button type="submit" id="qa-send" class="send-btn" disabled>发送问题</button>
+            </div>
+          </form>
         </div>
-        <div id="citations-list" class="citations-list"></div>
+      </section>
+
+      <aside id="citations-rail" class="citations-rail" aria-label="引用依据">
+        <button id="citations-toggle" class="citations-toggle" type="button" disabled
+          aria-controls="qa-citations" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 4.75h9A1.75 1.75 0 0 1 16.25 6.5v12.75h-9A1.75 1.75 0 0 1 5.5 17.5V4.75Z"/><path d="M16.25 7.25H18.5v12h-9"/></svg>
+          <span>依据</span>
+          <span id="citations-count" class="citations-count"></span>
+        </button>
+        <section id="qa-citations" class="citations-panel" aria-labelledby="citations-title" hidden>
+          <div class="citations-head">
+            <h3 id="citations-title">引用依据 <span id="citations-panel-count" class="citations-panel-count"></span></h3>
+            <button id="citations-close" class="close-btn" type="button" aria-label="折叠引用依据">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
+            </button>
+          </div>
+          <div id="citations-list" class="citations-list"></div>
+        </section>
       </aside>
     </div>
+    <button id="conversation-backdrop" class="conversation-backdrop" type="button" aria-label="关闭对话历史" hidden></button>
   </main>
 
   <!-- ==================== 模拟法庭 Tab ==================== -->

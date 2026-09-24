@@ -1,13 +1,16 @@
 """Fast regression tests for reliability boundaries that do not need an LLM."""
 
 import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from werkzeug.exceptions import BadRequest
 
-from legalweb.app import text_value
-from legalweb.database import new_id
+from legalweb.app import create_app, text_value
+from legalweb.database import Database, new_id, now_iso
 from legalweb.llm import LLMClient
 from legalweb.qa import sanitize_citations
 
@@ -101,6 +104,26 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result["content"], "依据[C1]。")
         self.assertEqual(result["used"], ["C1"])
         self.assertEqual(result["removed"], 1)
+
+    def test_conversation_history_is_scoped_to_browser_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"LAW_DATA_DIR": directory}), \
+                    patch("legalweb.app.seed_sources"):
+                app = create_app()
+            database = Database(Path(directory))
+            stamp = now_iso()
+            with database.connect() as db:
+                for owner, conversation_id in (("browser-a", "conv-a"), ("browser-b", "conv-b")):
+                    db.execute("INSERT INTO conversations(id,title,owner_id,created_at)"
+                               " VALUES (?,?,?,?)", (conversation_id, owner, owner, stamp))
+                    db.execute("INSERT INTO messages(id,conversation_id,role,content,payload,created_at)"
+                               " VALUES (?,?,?,?,?,?)",
+                               (new_id(), conversation_id, "user", f"question-{owner}", "{}", stamp))
+            client = app.test_client()
+            listing = client.get("/api/conversations?client_id=browser-a").get_json()
+            self.assertEqual([item["id"] for item in listing["conversations"]], ["conv-a"])
+            self.assertIsNone(client.get(
+                "/api/conversations/conv-b?client_id=browser-a").get_json()["conversation"])
 
 
 if __name__ == "__main__":

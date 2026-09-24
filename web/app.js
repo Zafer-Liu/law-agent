@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  // ---- Tab 切换 ----
+  // ---- 应用导航 ----
   const tabs = document.querySelectorAll(".tab");
   const panels = document.querySelectorAll(".tab-panel");
   tabs.forEach((tab) => {
@@ -14,8 +14,11 @@
       tab.classList.add("active");
       tab.setAttribute("aria-selected", "true");
       document.getElementById("tab-" + tab.dataset.tab).classList.add("active");
+      document.body.classList.toggle("qa-active", tab.dataset.tab === "qa");
+      closeConversationDrawer();
     });
   });
+  document.body.classList.add("qa-active");
 
   // ---- 问答 ----
   const form = document.getElementById("qa-form");
@@ -25,10 +28,42 @@
   const citationsPanel = document.getElementById("qa-citations");
   const citationsList = document.getElementById("citations-list");
   const citationsCount = document.getElementById("citations-count");
+  const citationsPanelCount = document.getElementById("citations-panel-count");
   const citationsClose = document.getElementById("citations-close");
+  const citationsRail = document.getElementById("citations-rail");
+  const citationsToggle = document.getElementById("citations-toggle");
+  const conversationSidebar = document.getElementById("conversation-sidebar");
+  const conversationMenu = document.getElementById("conversation-menu");
+  const conversationBackdrop = document.getElementById("conversation-backdrop");
+  const conversationList = document.getElementById("conversation-list");
+  const conversationEmpty = document.getElementById("conversation-empty");
+  const conversationTotal = document.getElementById("conversation-total");
+  const conversationSearch = document.getElementById("conversation-search");
+  const newConversationBtn = document.getElementById("new-conversation");
+  const chatTitle = document.getElementById("chat-title");
+  const welcomeTemplate = messagesEl.innerHTML;
 
   let conversationId = "";
   let sending = false;
+  let conversations = [];
+  let activeCitations = [];
+  const clientId = getClientId();
+
+  function getClientId() {
+    const key = "faxiao_client_id";
+    try {
+      let value = localStorage.getItem(key);
+      if (!value) {
+        value = crypto.randomUUID
+          ? crypto.randomUUID()
+          : `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(key, value);
+      }
+      return value;
+    } catch {
+      return `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
 
   input.addEventListener("input", () => {
     sendBtn.disabled = !input.value.trim() || sending;
@@ -41,23 +76,54 @@
     }
   });
 
-  // 快捷提问
-  document.querySelectorAll(".quick-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      input.value = btn.dataset.q;
-      sendBtn.disabled = false;
-      form.requestSubmit();
-    });
+  newConversationBtn.addEventListener("click", () => {
+    if (sending) return window.toast("回答生成中，请稍候再新建对话");
+    startNewConversation();
   });
 
-  citationsClose.addEventListener("click", () => {
-    citationsPanel.hidden = true;
+  conversationMenu.addEventListener("click", () => {
+    const open = !conversationSidebar.classList.contains("open");
+    conversationSidebar.classList.toggle("open", open);
+    conversationMenu.setAttribute("aria-expanded", String(open));
+    conversationBackdrop.hidden = !open;
   });
+
+  conversationBackdrop.addEventListener("click", closeConversationDrawer);
+
+  conversationSearch.addEventListener("input", renderConversationList);
+
+  conversationList.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest("[data-conversation-id]");
+    if (!button) return;
+    if (sending) return window.toast("回答生成中，请稍候再切换对话");
+    loadConversation(button.dataset.conversationId);
+  });
+
+  citationsToggle.addEventListener("click", () => {
+    if (!activeCitations.length) return;
+    const open = !citationsRail.classList.contains("open");
+    if (open) showCitations(activeCitations);
+    setCitationsOpen(open);
+  });
+  citationsClose.addEventListener("click", () => setCitationsOpen(false));
 
   messagesEl.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const quick = event.target.closest(".quick-btn");
+    if (quick) {
+      input.value = quick.dataset.q;
+      sendBtn.disabled = false;
+      form.requestSubmit();
+      return;
+    }
     const ref = event.target.closest(".citation-ref");
     if (!ref) return;
-    citationsPanel.hidden = false;
+    const answer = ref.closest(".msg.assistant");
+    const citations = answer && answer.citationRefs ? answer.citationRefs : activeCitations;
+    setAvailableCitations(citations);
+    showCitations(citations);
+    setCitationsOpen(true);
     const item = citationsList.querySelector(`[data-label="${ref.dataset.label}"]`);
     if (!item) return;
     item.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -74,6 +140,8 @@
     sending = true;
     sendBtn.disabled = true;
     input.value = "";
+    const isNewConversation = !conversationId;
+    if (isNewConversation) chatTitle.textContent = question.slice(0, 60);
 
     // 移除欢迎页
     const welcome = messagesEl.querySelector(".welcome");
@@ -83,22 +151,19 @@
     const assistantEl = appendMessage("assistant", "");
     const stream = createStreamRenderer(assistantEl);
     stream.status("正在查找相关法律…");
-    citationsPanel.hidden = true;
-    citationsList.replaceChildren();
-    citationsCount.textContent = "";
+    clearCitations();
+    let resultEvent = null;
 
     try {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, conversation_id: conversationId }),
+        body: JSON.stringify({ question, conversation_id: conversationId, client_id: clientId }),
       });
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         stream.fail(err.error || "暂时无法回答，请稍后再试。");
-        sending = false;
-        sendBtn.disabled = false;
         return;
       }
 
@@ -118,6 +183,7 @@
           stream.push(event.text);
         } else if (event.type === "result") {
           conversationId = event.conversation_id || conversationId;
+          resultEvent = event;
           stream.finish(event);
         } else if (event.type === "error") {
           stream.fail(event.error || "暂时无法回答，请稍后再试。");
@@ -136,27 +202,132 @@
       buffer += decoder.decode();
       buffer.split("\n").forEach(handleLine);
       await stream.whenDone();
+      if (resultEvent) await refreshConversations();
     } catch (err) {
       stream.fail("网络错误，请重试。");
+    } finally {
+      sending = false;
+      sendBtn.disabled = !input.value.trim();
+      input.focus();
     }
-
-    sending = false;
-    sendBtn.disabled = !input.value.trim();
-    input.focus();
   });
 
-  function appendMessage(role, text) {
+  function closeConversationDrawer() {
+    conversationSidebar.classList.remove("open");
+    conversationMenu.setAttribute("aria-expanded", "false");
+    conversationBackdrop.hidden = true;
+  }
+
+  function startNewConversation() {
+    conversationId = "";
+    chatTitle.textContent = "新对话";
+    messagesEl.innerHTML = welcomeTemplate;
+    clearCitations();
+    renderConversationList();
+    closeConversationDrawer();
+    input.value = "";
+    sendBtn.disabled = true;
+    input.focus();
+  }
+
+  async function refreshConversations() {
+    try {
+      const res = await fetch(`/api/conversations?client_id=${encodeURIComponent(clientId)}`);
+      if (!res.ok) throw new Error("history request failed");
+      const data = await res.json();
+      conversations = data.conversations || [];
+      renderConversationList();
+    } catch {
+      conversationEmpty.textContent = "暂时无法加载对话记录";
+      conversationEmpty.hidden = false;
+    }
+  }
+
+  function renderConversationList() {
+    const query = conversationSearch.value.trim().toLocaleLowerCase("zh-CN");
+    const filtered = conversations.filter((item) => (
+      !query || item.title.toLocaleLowerCase("zh-CN").includes(query)
+      || String(item.preview || "").toLocaleLowerCase("zh-CN").includes(query)
+    ));
+    conversationList.replaceChildren();
+    filtered.forEach((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "conversation-item";
+      button.dataset.conversationId = item.id;
+      button.classList.toggle("active", item.id === conversationId);
+      button.setAttribute("aria-current", item.id === conversationId ? "true" : "false");
+
+      const title = document.createElement("span");
+      title.className = "conversation-item-title";
+      title.textContent = item.title;
+      const time = document.createElement("time");
+      time.className = "conversation-item-time";
+      time.dateTime = item.updated_at || item.created_at;
+      time.textContent = formatConversationTime(time.dateTime);
+      button.append(title, time);
+      conversationList.appendChild(button);
+    });
+    conversationTotal.textContent = conversations.length ? String(conversations.length) : "";
+    conversationEmpty.textContent = query ? "没有匹配的对话" : "还没有保存的对话";
+    conversationEmpty.hidden = filtered.length > 0;
+  }
+
+  function formatConversationTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const now = new Date();
+    if (date.toDateString() === now.toDateString()) {
+      return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
+    }
+    return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+  }
+
+  async function loadConversation(id) {
+    conversationId = id;
+    renderConversationList();
+    closeConversationDrawer();
+    messagesEl.innerHTML = '<div class="conversation-loading">正在载入对话…</div>';
+    clearCitations();
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(id)}?client_id=${encodeURIComponent(clientId)}`);
+      if (!res.ok) throw new Error("conversation request failed");
+      const data = await res.json();
+      if (!data.conversation) throw new Error("conversation missing");
+      chatTitle.textContent = data.conversation.title;
+      messagesEl.replaceChildren();
+      let latestCitations = [];
+      (data.messages || []).forEach((message) => {
+        const el = appendMessage(message.role, message.role === "user" ? message.content : "", false);
+        if (message.role === "assistant") {
+          renderAnswer(el, message, { updateCitationRail: false, shouldScroll: false });
+          if (message.citations && message.citations.length) latestCitations = message.citations;
+        }
+      });
+      setAvailableCitations(latestCitations);
+      scrollToBottom();
+    } catch {
+      conversationId = "";
+      chatTitle.textContent = "新对话";
+      messagesEl.innerHTML = '<div class="conversation-loading error">对话载入失败，请稍后重试。</div>';
+      renderConversationList();
+    }
+  }
+
+  function appendMessage(role, text, shouldScroll = true) {
     const el = document.createElement("div");
     el.className = "msg " + role;
     el.textContent = text;
     messagesEl.appendChild(el);
-    scrollToBottom();
+    if (shouldScroll) scrollToBottom();
     return el;
   }
 
-  function renderAnswer(el, event) {
+  function renderAnswer(el, event, options = {}) {
+    const { updateCitationRail = true, shouldScroll = true } = options;
     el.classList.remove("streaming", "loading");
     el.innerHTML = renderMarkdown(event.content);
+    el.citationRefs = Array.isArray(event.citations) ? event.citations : [];
 
     if (event.notice) {
       const notice = document.createElement("div");
@@ -165,13 +336,34 @@
       el.appendChild(notice);
     }
 
-    // 引用面板
-    if (event.citations && event.citations.length > 0) {
-      showCitations(event.citations);
-    }
+    if (updateCitationRail) setAvailableCitations(el.citationRefs);
 
-    scrollToBottom();
+    if (shouldScroll) scrollToBottom();
   }
+
+  function clearCitations() {
+    setAvailableCitations([]);
+    citationsList.replaceChildren();
+    setCitationsOpen(false);
+  }
+
+  function setAvailableCitations(citations) {
+    activeCitations = Array.isArray(citations) ? citations : [];
+    const count = activeCitations.length;
+    citationsCount.textContent = count ? String(count) : "";
+    citationsPanelCount.textContent = count ? `${count} 条` : "";
+    citationsToggle.disabled = count === 0;
+    if (!count) setCitationsOpen(false);
+  }
+
+  function setCitationsOpen(open) {
+    const expanded = Boolean(open && activeCitations.length);
+    citationsRail.classList.toggle("open", expanded);
+    citationsPanel.hidden = !expanded;
+    citationsToggle.setAttribute("aria-expanded", String(expanded));
+  }
+
+  refreshConversations();
 
   function createStreamRenderer(el) {
     let target = "";
@@ -405,7 +597,7 @@
 
   function showCitations(citations) {
     citationsList.replaceChildren();
-    citationsCount.textContent = `${citations.length} 条`;
+    citationsPanelCount.textContent = `${citations.length} 条`;
     citations.forEach((c) => {
       const item = document.createElement("article");
       item.className = "citation-item";
@@ -419,7 +611,6 @@
       `;
       citationsList.appendChild(item);
     });
-    citationsPanel.hidden = false;
   }
 
   function scrollToBottom() {

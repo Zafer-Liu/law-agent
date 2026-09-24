@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 CREATE INDEX IF NOT EXISTS chunks_source ON chunks(source_id, ordinal);
 CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -76,6 +76,13 @@ class Database:
                 db.execute("ALTER TABLE court_sessions ADD COLUMN state TEXT")
             except sqlite3.OperationalError:
                 pass  # 列已存在
+            # 旧库迁移：匿名浏览器标识隔离各自的问答历史，避免公开站点串话。
+            try:
+                db.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            db.execute("CREATE INDEX IF NOT EXISTS conversations_owner"
+                       " ON conversations(owner_id, created_at)")
 
     @contextmanager
     def connect(self):

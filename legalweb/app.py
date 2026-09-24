@@ -258,11 +258,35 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # 法律问答
     # ------------------------------------------------------------------
+    def client_identity(data) -> str:
+        client_id = text_value(data, "client_id", limit=128)
+        if len(client_id) < 8:
+            abort(400, "缺少有效的客户端标识")
+        return client_id
+
+    @app.get("/api/conversations")
+    def conversation_list():
+        client_id = client_identity(request.args)
+        with database.connect() as db:
+            rows = db.execute(
+                "SELECT c.id,c.title,c.created_at,"
+                " COALESCE((SELECT MAX(m.created_at) FROM messages m"
+                " WHERE m.conversation_id=c.id),c.created_at) AS updated_at,"
+                " COALESCE((SELECT m.content FROM messages m"
+                " WHERE m.conversation_id=c.id ORDER BY m.created_at DESC LIMIT 1),'') AS preview"
+                " FROM conversations c WHERE c.owner_id=?"
+                " AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)"
+                " ORDER BY updated_at DESC LIMIT 60",
+                (client_id,),
+            ).fetchall()
+        return jsonify({"conversations": [dict(row) for row in rows]})
+
     @app.get("/api/conversations/<conversation_id>")
     def conversation_detail(conversation_id):
+        client_id = client_identity(request.args)
         with database.connect() as db:
-            row = db.execute("SELECT id,title FROM conversations WHERE id=?",
-                             (conversation_id,)).fetchone()
+            row = db.execute("SELECT id,title FROM conversations WHERE id=? AND owner_id=?",
+                             (conversation_id, client_id)).fetchone()
             if not row:
                 return jsonify({"conversation": None})
             messages = db.execute("SELECT * FROM messages WHERE conversation_id=?"
@@ -275,20 +299,25 @@ def create_app() -> Flask:
         data = request.get_json(force=True, silent=True) or {}
         question = text_value(data, "question", limit=MAX_QUESTION)
         conversation_id = text_value(data, "conversation_id", limit=128)
+        client_id = client_identity(data)
         if not 2 <= len(question) <= MAX_QUESTION:
             abort(400, "问题长度需在 2-2000 字之间")
         if not qa_llm.configured:
             abort(503, "智能服务暂不可用，请稍后再试")
         with database.connect() as db:
             if conversation_id:
-                found = db.execute("SELECT id FROM conversations WHERE id=?",
+                found = db.execute("SELECT id,owner_id FROM conversations WHERE id=?",
                                    (conversation_id,)).fetchone()
-                if not found:
+                if not found or found["owner_id"] not in ("", client_id):
                     conversation_id = ""
+                elif not found["owner_id"]:
+                    db.execute("UPDATE conversations SET owner_id=? WHERE id=?",
+                               (client_id, conversation_id))
             if not conversation_id:
                 conversation_id = new_id()
-                db.execute("INSERT INTO conversations (id,title,created_at) VALUES (?,?,?)",
-                           (conversation_id, question[:60], now_iso()))
+                db.execute("INSERT INTO conversations (id,title,owner_id,created_at)"
+                           " VALUES (?,?,?,?)",
+                           (conversation_id, question[:60], client_id, now_iso()))
             old = db.execute("SELECT role,content FROM messages WHERE conversation_id=?"
                              " ORDER BY created_at DESC LIMIT 20", (conversation_id,)).fetchall()
         previous = [row["content"] for row in reversed(old) if row["role"] == "user"][-3:]
@@ -342,7 +371,8 @@ def create_app() -> Flask:
                            (new_id(), conversation_id, "assistant", result["content"],
                             json.dumps({"citations": citations,
                                         "backend": retrieval["backend"],
-                                        "grounded": bool(result["used"])}, ensure_ascii=False),
+                                        "grounded": bool(result["used"]),
+                                        "notice": notice}, ensure_ascii=False),
                             now_iso()))
             yield sse({"type": "result", "content": result["content"], "citations": citations,
                        "grounded": bool(result["used"]), "notice": notice,
