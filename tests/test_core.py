@@ -9,6 +9,7 @@ from werkzeug.exceptions import BadRequest
 from legalweb.app import text_value
 from legalweb.database import new_id
 from legalweb.llm import LLMClient
+from legalweb.qa import sanitize_citations
 
 
 class FakeResponse:
@@ -88,6 +89,18 @@ class CoreTests(unittest.TestCase):
                     output.append(next(stream))
         self.assertEqual(output, [("delta", "<t")])
         self.assertEqual(stopped.exception.value, "<t")
+
+    def test_citations_normalize_grouped_and_fullwidth_forms(self):
+        result = sanitize_citations("依据[C1, C2]，并参照【C3】。", {"C1", "C2", "C3"})
+        self.assertEqual(result["content"], "依据[C1][C2]，并参照[C3]。")
+        self.assertEqual(result["used"], ["C1", "C2", "C3"])
+        self.assertEqual(result["removed"], 0)
+
+    def test_citations_remove_only_invalid_labels_after_normalizing(self):
+        result = sanitize_citations("依据[C1、C9]。", {"C1"})
+        self.assertEqual(result["content"], "依据[C1]。")
+        self.assertEqual(result["used"], ["C1"])
+        self.assertEqual(result["removed"], 1)
 
 
 if __name__ == "__main__":

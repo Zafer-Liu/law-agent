@@ -296,7 +296,7 @@ def create_app() -> Flask:
                           if row["role"] == "assistant"][-2:]
 
         def stream():
-            yield sse({"type": "status", "text": "正在检索法律知识库…"})
+            yield sse({"type": "status", "text": "正在查找相关法律…"})
             chunks = load_chunks()
             retrieval = retrieve(question, chunks, fts_lookup(terms(question)), embedder, limit=6)
             if not retrieval["hits"]:

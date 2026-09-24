@@ -97,9 +97,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .msg { max-width: min(85%, 760px); padding: 14px 18px; border-radius: var(--radius); line-height: 1.8; font-size: 14px; word-break: break-word; }
 .msg.user { align-self: flex-end; background: var(--primary); color: #fff; box-shadow: 0 2px 8px rgba(200,40,30,.2); }
 .msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); }
-.msg.user, .msg.assistant.streaming { white-space: pre-wrap; }
+.msg.user { white-space: pre-wrap; }
+.msg.assistant.loading { color: var(--text-muted); }
+.msg.assistant.loading::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 9px;
+  border-radius: 50%; background: var(--primary); vertical-align: 1px;
+  animation: retrievalPulse 1.2s ease-in-out infinite;
+}
+.msg.assistant.streaming { min-width: 92px; }
 .msg.assistant.streaming::after { content: ""; display: inline-block; width: 2px; height: 1.15em; margin-left: 3px; vertical-align: -0.2em; background: var(--primary); animation: answerCursor .8s steps(1) infinite; }
 @keyframes answerCursor { 50% { opacity: 0; } }
+@keyframes retrievalPulse { 50% { opacity: .28; transform: scale(.72); } }
 .msg.assistant h1, .msg.assistant h2, .msg.assistant h3 { line-height: 1.35; color: var(--text); }
 .msg.assistant h1 { font-size: 21px; margin: 4px 0 12px; }
 .msg.assistant h2 { font-size: 18px; margin: 20px 0 8px; }
@@ -109,9 +117,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .msg.assistant ul, .msg.assistant ol { margin: 8px 0 14px 1.35em; }
 .msg.assistant li + li { margin-top: 5px; }
 .msg.assistant blockquote { margin: 12px 0; padding: 8px 12px; color: #57534e; background: #faf8f6; border-bottom: 2px solid var(--primary-lighter); }
+.msg.assistant hr { height: 1px; margin: 18px 0; border: 0; background: var(--border); }
 .msg.assistant pre { margin: 12px 0; padding: 12px; overflow-x: auto; background: #292524; color: #f5f5f4; border-radius: 8px; line-height: 1.65; white-space: pre; }
 .msg.assistant code { padding: 1px 5px; background: #f5f0ec; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .9em; }
 .msg.assistant pre code { padding: 0; background: transparent; color: inherit; }
+.msg.assistant .md-table-wrap { margin: 14px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+.msg.assistant table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.msg.assistant th, .msg.assistant td { min-width: 110px; padding: 9px 11px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.msg.assistant th { background: #faf8f6; font-weight: 700; }
+.msg.assistant tbody tr:last-child td { border-bottom: 0; }
 .msg.assistant a { color: var(--primary); text-underline-offset: 2px; }
 .msg.assistant .citation-ref { color: var(--primary); cursor: pointer; font-weight: 600; border: 0; padding: 0; background: transparent; font: inherit; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 .msg.assistant .citation-ref:hover { color: var(--primary-dark); background: var(--primary-light); border-radius: 3px; padding: 0 2px; }
@@ -138,17 +152,22 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .citations-panel {
   width: 360px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); display: flex; flex-direction: column;
-  overflow: hidden; flex-shrink: 0; box-shadow: var(--shadow);
+  align-self: flex-start; position: sticky; top: 100px;
+  max-height: calc(100dvh - 124px); min-height: 0; overflow: hidden;
+  flex-shrink: 0; box-shadow: var(--shadow);
 }
 .citations-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); background: #faf8f6; }
 .citations-head h3 { font-size: 15px; color: var(--primary); }
+.citations-count { margin-left: 5px; color: var(--text-muted); font-size: 11px; font-weight: 500; }
 .close-btn { width: 44px; height: 44px; background: none; border: none; border-radius: 8px; font-size: 22px; cursor: pointer; color: var(--text-muted); transition: color .15s, background .15s; }
 .close-btn:hover { color: var(--text); background: #f5f0ec; }
-.citations-list { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
-.citation-item { padding: 12px 14px; background: #faf8f6; border-radius: 10px; border: 1px solid var(--primary-lighter); transition: background .3s; }
+.citations-list { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 12px; }
+.citation-item { min-width: 0; padding: 13px 14px; background: #faf8f6; border-radius: 10px; border: 1px solid var(--primary-lighter); transition: background .25s, border-color .25s, box-shadow .25s; }
+.citation-item.highlight { background: var(--primary-light); border-color: var(--primary); box-shadow: 0 3px 10px rgba(200,40,30,.12); }
+.citation-meta { display: flex; align-items: flex-start; gap: 8px; }
 .citation-item .label { font-weight: 700; color: var(--primary); font-size: 13px; }
-.citation-item .section { font-size: 12px; color: var(--text-muted); margin: 3px 0 8px; }
-.citation-item .excerpt { font-size: 13px; line-height: 1.7; color: var(--text); }
+.citation-item .section { min-width: 0; font-size: 12px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.citation-item .excerpt { margin-top: 9px; font-size: 13px; line-height: 1.75; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* ==================== 模拟法庭 ==================== */
 .court-select { max-width: 800px; padding: 40px 0; }
@@ -476,7 +495,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
   .welcome, .court-select { padding: 24px 0; }
   .welcome h2, .court-select h2 { font-size: 1.75rem; }
   .question-groups { grid-template-columns: 1fr; gap: 18px; }
-  .citations-panel { width: 100%; max-height: 300px; }
+  .citations-panel {
+    position: fixed; inset: auto 12px 12px; z-index: 160;
+    width: auto; max-height: min(72dvh, 620px);
+    box-shadow: 0 18px 48px rgba(28,25,23,.2), 0 4px 12px rgba(28,25,23,.1);
+  }
   .verdict-cards { flex-direction: column; }
   .case-cards { grid-template-columns: minmax(0, 1fr); }
   .role-options { grid-template-columns: 1fr; }
@@ -505,5 +528,6 @@ button:active:not(:disabled) { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) {
   .quick-btn, .case-card, .bench, .evidence-card, .cp-option, .delib-option,
   .primary-btn, .outline-btn, .text-btn { transition: none; }
-  .evidence-card.cited, .cp-card, .typing-indicator, .toast { animation: none; }
+  .evidence-card.cited, .cp-card, .typing-indicator, .toast,
+  .msg.assistant.loading::before, .msg.assistant.streaming::after { animation: none; }
 }

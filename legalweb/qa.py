@@ -14,6 +14,8 @@ SYSTEM_PROMPT = """你是一名严谨的中文法律咨询助手「法晓」，�
 6. 使用 Markdown 组织回答：可使用二、三级标题、列表、加粗和代码格式；不要输出 HTML。"""
 
 CITATION_RE = re.compile(r"\[(C\d+)\]")
+GROUPED_CITATION_RE = re.compile(r"[\[【]((?:C\d+\s*[,，、;；]\s*)+C\d+)[\]】]")
+FULLWIDTH_CITATION_RE = re.compile(r"【(C\d+)】")
 
 
 class Evidence:
@@ -53,6 +55,15 @@ def build_messages(question, evidence: Evidence, previous_questions, recent_answ
 
 def sanitize_citations(text: str, valid_labels: set) -> dict:
     """移除不在证据白名单里的引用标记，返回正文、实际使用的标签与清理数。"""
+    # 模型偶尔会把多个依据合写为 [C1, C2]，或使用中文方括号。
+    # 先统一为逐个引用，避免合法依据在前端缺失。
+    text = FULLWIDTH_CITATION_RE.sub(r"[\1]", text)
+
+    def expand_group(match):
+        labels = re.findall(r"C\d+", match.group(1))
+        return "".join(f"[{label}]" for label in labels)
+
+    text = GROUPED_CITATION_RE.sub(expand_group, text)
     removed = 0
 
     def repl(match):
