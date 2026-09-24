@@ -596,15 +596,16 @@
   }
 
   function showCitations(citations) {
+    const displayCitations = citations.flatMap(expandLegacyCitation);
     citationsList.replaceChildren();
-    citationsPanelCount.textContent = `${citations.length} 条`;
-    citations.forEach((c) => {
+    citationsPanelCount.textContent = `${displayCitations.length} 条`;
+    displayCitations.forEach((c) => {
       const sectionParts = String(c.section || "").split(/\s+\/\s+/).filter(Boolean);
       const article = c.article || sectionParts.find((part) => /第.+条/.test(part)) || "";
-      const source = c.source || sectionParts.filter((part) => part !== article).join(" · ") || "法律资料";
+      const source = cleanCitationSource(c.source || sectionParts.filter((part) => part !== article).join(" · "));
       const item = document.createElement("article");
       item.className = "citation-item";
-      item.dataset.label = c.label;
+      item.dataset.label = c.parentLabel || c.label;
       item.innerHTML = `
         <div class="citation-meta">
           <span class="label">${escapeHtml(c.label)}</span>
@@ -615,6 +616,31 @@
       `;
       citationsList.appendChild(item);
     });
+  }
+
+  function cleanCitationSource(value) {
+    const source = String(value || "法律资料")
+      .replace(/^(?:法条|判例)\s*·\s*/, "")
+      .replace(/\s*\(FBM[-\w.]+(?:\s*\(\d+\))?\)\s*$/i, "")
+      .trim();
+    return source || "法律资料";
+  }
+
+  function expandLegacyCitation(citation) {
+    if (citation.article || !String(citation.section || "").startsWith("法条 ·")) return [citation];
+    const text = String(citation.excerpt || "");
+    const pattern = /^(?:#{1,6}\s*)?(第[一-龥〇\d]+条(?:之[一-龥〇\d]+)?)\s*/gm;
+    const matches = [...text.matchAll(pattern)];
+    if (matches.length < 2) return [citation];
+    return matches.map((match, index) => ({
+      ...citation,
+      label: `${citation.label}.${index + 1}`,
+      parentLabel: citation.label,
+      source: cleanCitationSource(citation.section),
+      article: match[1],
+      excerpt: text.slice(match.index + match[0].length,
+        index + 1 < matches.length ? matches[index + 1].index : text.length).trim(),
+    })).filter((item) => item.excerpt);
   }
 
   function scrollToBottom() {
