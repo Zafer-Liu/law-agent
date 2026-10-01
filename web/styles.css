@@ -175,7 +175,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .msg::before { content: ""; position: absolute; top: 3px; width: 32px; height: 32px; }
 .msg.assistant::before {
   left: -44px; border-radius: 9px;
-  background: var(--surface) url("logo.svg") center / 32px 32px no-repeat;
+  background: var(--surface) url("logo.png") center / 32px 32px no-repeat;
   box-shadow: 0 1px 4px rgba(28,25,23,.12), inset 0 0 0 1px var(--border);
 }
 .msg.user::before {

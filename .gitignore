@@ -15,3 +15,6 @@ Thumbs.db
 # Local deploy artifacts (secrets, db dumps, tarballs)
 .deploy/
 
+
+# Local design drafts / logo candidates
+design/
