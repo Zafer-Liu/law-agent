@@ -7,3 +7,4 @@ docs/
 !README.md
 reindex_once.py
 test_court_e2e.py
+preview_server.py

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="法晓标志">
+  <defs>
+    <linearGradient id="lawx-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d1382c"/>
+      <stop offset="1" stop-color="#b01f15"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#lawx-bg)"/>
+  <path fill="#ffffff" d="M32 11.5C20.7 11.5 11.5 18.7 11.5 27.6c0 5.2 3 9.8 7.7 12.8-.3 2.4-1.3 4.6-3 6.3-.5.5-.1 1.3.6 1.2 3.5-.4 6.6-1.6 9-3.3 2 .6 4.1.9 6.2.9 11.3 0 20.5-7.2 20.5-16.1S43.3 11.5 32 11.5Z"/>
+  <g fill="none" stroke="#c8281e" stroke-width="2.2" stroke-linecap="round">
+    <path d="M32 22v14"/>
+    <path d="M23 25.7h18"/>
+    <path d="M23 25.7 19.6 31.4M23 25.7l3.4 5.7M41 25.7 37.6 31.4M41 25.7l3.4 5.7"/>
+    <path d="M27.6 36.8h8.8" stroke-width="2.6"/>
+  </g>
+  <circle cx="32" cy="20.1" r="1.7" fill="#c8281e"/>
+  <path fill="#c8281e" d="M19.2 31.3h7.6a3.8 3.8 0 0 1-7.6 0Z"/>
+  <path fill="#c8281e" d="M37.2 31.3h7.6a3.8 3.8 0 0 1-7.6 0Z"/>
+</svg>
