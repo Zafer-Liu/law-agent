@@ -384,6 +384,68 @@ def create_app() -> Flask:
             abort(400, "缺少有效的客户端标识")
         return client_id
 
+    # ------------------------------------------------------------------
+    # 獬豸桌宠：成长进度（按完成问答/庭审次数积累）
+    # ------------------------------------------------------------------
+    PET_STAGES = (
+        {"key": "cub", "name": "幼獬", "need": 0, "title": "初识人间，蹒跚学步"},
+        {"key": "dawn", "name": "启蒙", "need": 30, "title": "开始辨认是非曲直"},
+        {"key": "keen", "name": "明辨", "need": 100, "title": "目光如炬，善恶分明"},
+        {"key": "just", "name": "执正", "need": 250, "title": "以角触不直，仗义执言"},
+        {"key": "sage", "name": "神判", "need": 500, "title": "明察秋毫，公正无私"},
+        {"key": "luck", "name": "祥瑞", "need": 1000, "title": "德刑昭明，天下大安"},
+    )
+    PET_GAINS = {"qa": 2, "court": 10}
+
+    def pet_state(row) -> dict:
+        exp = row["exp"] if row else 0
+        index = 0
+        for i, stage in enumerate(PET_STAGES):
+            if exp >= stage["need"]:
+                index = i
+        stage, nxt = PET_STAGES[index], (PET_STAGES[index + 1]
+                                         if index + 1 < len(PET_STAGES) else None)
+        span = (nxt["need"] - stage["need"]) if nxt else 1
+        return {
+            "exp": exp,
+            "qa_count": row["qa_count"] if row else 0,
+            "court_count": row["court_count"] if row else 0,
+            "stage": stage["key"], "stage_index": index,
+            "stage_name": stage["name"], "stage_title": stage["title"],
+            "next_stage_name": nxt["name"] if nxt else "",
+            "next_need": max(nxt["need"] - exp, 0) if nxt else 0,
+            "progress": min(int((exp - stage["need"]) * 100 / span), 100),
+            "stages": [{"key": s["key"], "name": s["name"], "need": s["need"]}
+                       for s in PET_STAGES],
+        }
+
+    def pet_tick(client_id: str, kind: str) -> dict:
+        """问答或庭审完成时累加经验；仅在完成事件处调用，天然幂等。"""
+        gain = PET_GAINS.get(kind)
+        if not gain:
+            return pet_state(None)
+        counter = "qa_count" if kind == "qa" else "court_count"
+        with database.connect() as db:
+            db.execute(
+                "INSERT INTO pet_progress (client_id,exp,qa_count,court_count,updated_at)"
+                " VALUES (?,?,?,?,?)"
+                " ON CONFLICT(client_id) DO UPDATE SET"
+                " exp=pet_progress.exp+excluded.exp,"
+                f" {counter}=pet_progress.{counter}+1,"
+                " updated_at=excluded.updated_at",
+                (client_id, gain, kind == "qa", kind == "court", now_iso()))
+            row = db.execute("SELECT * FROM pet_progress WHERE client_id=?",
+                             (client_id,)).fetchone()
+        return pet_state(row)
+
+    @app.get("/api/pet")
+    def pet_progress_api():
+        client_id = client_identity(request.args)
+        with database.connect() as db:
+            row = db.execute("SELECT * FROM pet_progress WHERE client_id=?",
+                             (client_id,)).fetchone()
+        return jsonify(pet_state(row))
+
     @app.get("/api/conversations")
     def conversation_list():
         client_id = client_identity(request.args)
@@ -470,6 +532,7 @@ def create_app() -> Flask:
                                " VALUES (?,?,?,?,?,?)",
                                (new_id(), conversation_id, "assistant", payload["content"],
                                 json.dumps({"grounded": False}), now_iso()))
+                payload["pet"] = pet_tick(client_id, "qa")
                 yield sse({"type": "result", **payload})
                 return
             evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
@@ -505,9 +568,10 @@ def create_app() -> Flask:
                                         "grounded": bool(result["used"]),
                                         "notice": notice}, ensure_ascii=False),
                             now_iso()))
+            pet = pet_tick(client_id, "qa")
             yield sse({"type": "result", "content": result["content"], "citations": citations,
                        "grounded": bool(result["used"]), "notice": notice,
-                       "backend": backend, "conversation_id": conversation_id})
+                       "backend": backend, "conversation_id": conversation_id, "pet": pet})
 
         return Response(stream_with_context(stream()), mimetype="text/event-stream")
 
@@ -678,6 +742,7 @@ def create_app() -> Flask:
         deliberation = {"option_id": option_id, "label": option["label"],
                         "years": years, "convict": bool(option.get("convict")),
                         "marks": marks}
+        pet_client = text_value(data, "client_id", limit=128)
         engine = restore_engine(row)
 
         def stream():
@@ -695,6 +760,11 @@ def create_app() -> Flask:
                            " WHERE id=?",
                            (json.dumps(deliberation, ensure_ascii=False), analysis,
                             now_iso(), session_id))
+            pet = None
+            if len(pet_client) >= 8:
+                pet = pet_tick(pet_client, "court")
+            if pet:
+                yield sse({"type": "pet", "pet": pet})
 
         return Response(stream_with_context(stream()), mimetype="text/event-stream")
 

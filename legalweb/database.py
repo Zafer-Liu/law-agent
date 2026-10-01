@@ -43,6 +43,13 @@ CREATE INDEX IF NOT EXISTS court_sessions_case ON court_sessions(case_id, create
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY, value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pet_progress (
+    client_id TEXT PRIMARY KEY,
+    exp INTEGER NOT NULL DEFAULT 0,
+    qa_count INTEGER NOT NULL DEFAULT 0,
+    court_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
 """
 
 

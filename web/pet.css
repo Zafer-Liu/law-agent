@@ -1,0 +1,210 @@
+/* ============ 獬豸桌宠 ============ */
+.pet-root {
+  position: absolute;
+  right: 22px;
+  bottom: 150px; /* JS 按 composer-dock 实际高度同步 */
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.pet-badge {
+  position: relative;
+  width: 96px;
+  height: 96px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 6px 18px rgba(28, 25, 23, .14);
+  cursor: pointer;
+  pointer-events: auto;
+  overflow: hidden;
+  transition: box-shadow .2s, transform .2s;
+}
+.pet-badge:hover { box-shadow: 0 8px 22px rgba(200, 40, 30, .18); }
+.pet-badge:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.pet-sprite {
+  width: 100%;
+  height: 100%;
+  background: #fff center / cover no-repeat;
+  image-rendering: auto;
+  transition: transform .16s ease-out;
+}
+
+/* 阶段等级微光：执正起角部泛金 */
+.pet-badge[data-stage="just"] .pet-sprite,
+.pet-badge[data-stage="sage"] .pet-sprite,
+.pet-badge[data-stage="luck"] .pet-sprite { filter: saturate(1.12); }
+.pet-badge[data-stage="just"]::after,
+.pet-badge[data-stage="sage"]::after,
+.pet-badge[data-stage="luck"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 14px rgba(217, 119, 6, .35);
+  pointer-events: none;
+}
+
+.pet-stage-chip {
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  transform: translateX(-50%);
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(200, 40, 30, .3);
+}
+
+/* 状态气泡（正在查阅法条… / 回答完成） */
+.pet-bubble {
+  max-width: 190px;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  border-bottom-right-radius: 4px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: right;
+  pointer-events: none;
+  display: none;
+}
+.pet-bubble.show {
+  display: block;
+  animation: petBubbleIn .25s ease-out;
+}
+@keyframes petBubbleIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 成长面板 */
+.pet-panel {
+  width: 252px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(28, 25, 23, .18);
+  opacity: 0;
+  transform: translateY(6px) scale(.97);
+  transform-origin: bottom right;
+  transition: opacity .2s, transform .2s;
+  pointer-events: none;
+}
+.pet-panel.show { opacity: 1; transform: none; pointer-events: auto; }
+.pet-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.pet-panel-head strong { font-size: 15px; }
+.pet-panel-head small { color: var(--text-muted); font-size: 11px; }
+.pet-panel-title { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+
+.pet-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: #efe9e3;
+  overflow: hidden;
+}
+.pet-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary-light), var(--primary));
+  transition: width .5s ease;
+}
+.pet-bar-note {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 0 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.pet-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.pet-stat {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #faf8f6;
+}
+.pet-stat b { display: block; font-size: 16px; color: var(--primary-dark); }
+.pet-stat span { color: var(--text-muted); font-size: 11px; }
+.pet-stages-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+.pet-stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e7ddd5;
+}
+.pet-stage-dot.reached { background: var(--primary); }
+
+/* ---- 动画 ---- */
+@keyframes petWiggle {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-4deg); }
+  75% { transform: rotate(4deg); }
+}
+@keyframes petBounce {
+  0%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-9px); }
+  60% { transform: translateY(-3px); }
+}
+@keyframes petShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  45% { transform: translateX(4px); }
+  70% { transform: translateX(-3px); }
+}
+@keyframes petFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.pet-badge.anim-wiggle { animation: petWiggle .5s ease-in-out infinite; }
+.pet-badge.anim-bounce { animation: petBounce .65s ease-in-out 2; }
+.pet-badge.anim-shake { animation: petShake .45s ease-in-out 1; }
+.pet-badge.anim-float { animation: petFloat 3.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pet-badge.anim-wiggle,
+  .pet-badge.anim-bounce,
+  .pet-badge.anim-shake,
+  .pet-badge.anim-float { animation: none; }
+  .pet-sprite { transition: none; }
+}
+
+@media (max-width: 768px) {
+  .pet-root { right: 12px; }
+  .pet-badge { width: 72px; height: 72px; border-radius: 16px; }
+  .pet-bubble { max-width: 150px; }
+  .pet-panel { width: 216px; padding: 12px; }
+}

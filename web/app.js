@@ -158,6 +158,7 @@
     stream.status("正在查找相关法律…");
     clearCitations();
     let resultEvent = null;
+    window.dispatchEvent(new CustomEvent("pet:ask"));
 
     try {
       const res = await fetch(API_BASE + "/api/ask", {
@@ -169,6 +170,7 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         stream.fail(err.error || "暂时无法回答，请稍后再试。");
+        window.dispatchEvent(new CustomEvent("pet:error"));
         return;
       }
 
@@ -184,14 +186,17 @@
 
         if (event.type === "status") {
           stream.status(event.text);
+          window.dispatchEvent(new CustomEvent("pet:status", { detail: { text: event.text } }));
         } else if (event.type === "delta") {
           stream.push(event.text);
         } else if (event.type === "result") {
           conversationId = event.conversation_id || conversationId;
           resultEvent = event;
           stream.finish(event);
+          window.dispatchEvent(new CustomEvent("pet:answer", { detail: { pet: event.pet } }));
         } else if (event.type === "error") {
           stream.fail(event.error || "暂时无法回答，请稍后再试。");
+          window.dispatchEvent(new CustomEvent("pet:error"));
         }
       };
 
@@ -210,6 +215,7 @@
       if (resultEvent) await refreshConversations();
     } catch (err) {
       stream.fail("网络错误，请重试。");
+      window.dispatchEvent(new CustomEvent("pet:error"));
     } finally {
       sending = false;
       sendBtn.disabled = !input.value.trim();

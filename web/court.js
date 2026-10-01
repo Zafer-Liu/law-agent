@@ -782,6 +782,9 @@
       if (!selectedOpt) { toast("请选择你的评议意见"); return; }
 
       const body = { option: selectedOpt.value, marks: Array.from(markedEvidence) };
+      try {
+        body.client_id = localStorage.getItem("faxiao_client_id") || "";
+      } catch { /* 隐私模式无 localStorage，仅跳过宠物经验 */ }
       const opt = options.find((o) => o.id === selectedOpt.value);
       if (opt && opt.convict) {
         body.years = parseInt(slider.value, 10);
@@ -819,6 +822,8 @@
             analysisEl.textContent += displayEvidenceNames(event.text);
           } else if (event.type === "error") {
             toast(event.error);
+          } else if (event.type === "pet" && event.pet) {
+            window.dispatchEvent(new CustomEvent("pet:pet", { detail: { pet: event.pet } }));
           }
         });
       } catch {
