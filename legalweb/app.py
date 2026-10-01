@@ -4,7 +4,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
+from collections import deque
+from datetime import datetime
 from itertools import zip_longest
 from pathlib import Path
 from threading import Lock
@@ -26,10 +29,43 @@ from .database import Database, new_id, now_iso, public_message
 from .documents import FORMATS, parse_document, split_sections
 from .jev_gate import configured as jev_configured
 from .llm import LLMClient, LLMError
+from .pkulaw import PkulawClient
 from .rag import EmbeddingClient, retrieve, terms, tokenize
 
 LOG = logging.getLogger("legalweb")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+
+
+class _RingLogHandler(logging.Handler):
+    """内存环形日志：设置面板展示最近的运行日志（不落盘、重启即清空）。"""
+
+    def __init__(self, capacity: int = 200):
+        super().__init__()
+        self.records = deque(maxlen=capacity)
+
+    def emit(self, record):
+        try:
+            self.records.append({
+                "time": datetime.now().strftime("%m-%d %H:%M:%S"),
+                "level": record.levelname,
+                "name": record.name.split(".")[-1],
+                "message": record.getMessage(),
+            })
+        except Exception:  # noqa: BLE001 — 日志钩子永不影响主链路
+            pass
+
+
+_RING_LOG = _RingLogHandler()
+SETTING_KEYS = ("vector", "jev", "pkulaw")
+
+
+def _load_settings(db) -> dict:
+    """检索增强开关（settings 表，缺省全开）；键名固定，容错未知行。"""
+    rows = db.execute(
+        f"SELECT key, value FROM settings WHERE key IN ({','.join('?' * len(SETTING_KEYS))})",
+        SETTING_KEYS).fetchall()
+    stored = {row["key"]: row["value"] for row in rows}
+    return {key: stored.get(key, "1") != "0" for key in SETTING_KEYS}
 SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
 ASSET_DIR = Path(__file__).resolve().parent.parent / "assset"
 BUILTIN_KB_DIRS = (
@@ -45,7 +81,13 @@ MAX_COURT_STATEMENT = 500
 # overlarge request before saving it protects the uploads directory as well.
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 # Product positioning changed from youth education to general legal literacy.
-RETIRED_SEED_TITLES = {"weihuichengnianren"}
+RETIRED_SEED_TITLES = {
+    "weihuichengnianren",
+    # 普法演示用节选（2026-09-29 应要求下架，仅保留正式法条/司法解释）
+    "民法典与合同规则（普法节选）",
+    "刑法（演示用节选）",
+    "刑事诉讼法（庭审程序演示用节选）",
+}
 
 
 def sse(payload: dict) -> str:
@@ -93,6 +135,20 @@ def index_document(database: Database, embedder: EmbeddingClient,
             "chunk_count": len(chunks), "vector_indexed": bool(embeddings)}
 
 
+def _doc_display_title(path) -> str:
+    """文档展示标题：Markdown 优先取首个一级标题；文件名去掉 FBM 来源编号。"""
+    stem = re.sub(r"\s*\((?:FBM[-\w.]*)\)\s*", "", path.stem).strip() or path.stem
+    if path.suffix.lower() == ".md":
+        try:
+            head = path.read_text(encoding="utf-8", errors="ignore")[:2000]
+            match = re.search(r"^#\s+(.+?)\s*$", head, re.MULTILINE)
+            if match:
+                return match.group(1)[:120]
+        except OSError:
+            pass
+    return stem
+
+
 def builtin_documents():
     """Yield unique built-in RAG documents from seed, law and case folders."""
     candidates = []
@@ -112,8 +168,11 @@ def builtin_documents():
             LOG.info("skip duplicate built-in source %s", path.name)
             continue
         seen_digests.add(digest)
-        title = f"{category} · {path.stem}" if category else path.stem
-        yield path, title[:120]
+        display = _doc_display_title(path)
+        title = f"{category} · {display}" if category else display
+        # 旧版命名（文件名 stem 直接当标题）作迁移对照
+        legacy = f"{category} · {path.stem}" if category else path.stem
+        yield path, title[:120], legacy[:120]
 
 
 def seed_sources(database: Database, embedder: EmbeddingClient):
@@ -122,7 +181,12 @@ def seed_sources(database: Database, embedder: EmbeddingClient):
         for title in RETIRED_SEED_TITLES:
             db.execute("DELETE FROM sources WHERE title=?", (title,))
         existing = {row["title"] for row in db.execute("SELECT title FROM sources")}
-    for path, title in builtin_documents():
+    for path, title, legacy in builtin_documents():
+        # 清理旧版命名的同名来源（FBM 编号 / 拼音文件名标题），避免新旧重复
+        if legacy != title:
+            with database.connect() as db:
+                db.execute("DELETE FROM sources WHERE title=?", (legacy,))
+            existing.discard(legacy)
         if title in existing:
             continue
         try:
@@ -147,6 +211,13 @@ def create_app() -> Flask:
     embedder = EmbeddingClient()
     qa_llm = LLMClient("LAW_LLM")
     court_llm = LLMClient("LAW_COURT_LLM")
+    pkulaw = PkulawClient()
+    if not pkulaw.configured:
+        LOG.info("北大法宝在线检索未配置：设置 LAW_PKULAW_TOKEN 后自动启用")
+    legal_logger = logging.getLogger("legalweb")
+    if _RING_LOG not in legal_logger.handlers:
+        _RING_LOG.setLevel(logging.INFO)
+        legal_logger.addHandler(_RING_LOG)
     seed_sources(database, embedder)
     if not qa_llm.configured:
         LOG.warning("法律问答模型未配置：请设置 LAW_LLM_* 环境变量")
@@ -175,6 +246,44 @@ def create_app() -> Flask:
                         "embed_configured": embedder.configured,
                         "jev_configured": jev_configured(),
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
+
+    @app.get("/api/settings")
+    def get_settings():
+        with database.connect() as db:
+            enabled = _load_settings(db)
+        return jsonify({"features": {
+            "vector": {"enabled": enabled["vector"] and embedder.configured,
+                       "configured": embedder.configured,
+                       "model": embedder.model,
+                       "note": "" if embedder.configured else "未配置 LAW_EMBED_BASE_URL，当前为关键词检索"},
+            "jev": {"enabled": enabled["jev"] and jev_configured(),
+                    "configured": jev_configured(),
+                    "model": "jev-latest",
+                    "note": "" if jev_configured() else "未配置 TYPESAFE_API_KEY，门控未生效"},
+            "pkulaw": {"enabled": enabled["pkulaw"] and pkulaw.configured,
+                       "configured": pkulaw.configured,
+                       "model": f"语义检索 · 每次取 {pkulaw.size} 条",
+                       "note": "" if pkulaw.configured else "未配置 LAW_PKULAW_TOKEN，在线检索停用"},
+        }})
+
+    @app.post("/api/settings")
+    def update_settings():
+        data = request.get_json(force=True, silent=True) or {}
+        updates = {key: bool(data[key]) for key in SETTING_KEYS if key in data}
+        if not updates:
+            abort(400, "没有可更新的设置项")
+        with database.connect() as db:
+            for key, value in updates.items():
+                db.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                           (key, "1" if value else "0"))
+            enabled = _load_settings(db)
+        return jsonify({"ok": True, "features": {
+            "vector": enabled["vector"], "jev": enabled["jev"], "pkulaw": enabled["pkulaw"]}})
+
+    @app.get("/api/logs")
+    def recent_logs():
+        return jsonify({"logs": list(reversed(_RING_LOG.records))})
 
     # ------------------------------------------------------------------
     # 知识库
@@ -231,6 +340,17 @@ def create_app() -> Flask:
                               " ORDER BY created_at").fetchall()
         return jsonify({"sources": [dict(row) for row in rows],
                         "embed_configured": embedder.configured})
+
+    @app.get("/api/kb/<source_id>")
+    def kb_detail(source_id):
+        with database.connect() as db:
+            src = db.execute("SELECT id,title,chunk_count,created_at FROM sources"
+                             " WHERE id=?", (source_id,)).fetchone()
+            if src is None:
+                abort(404, "资料不存在")
+            rows = db.execute("SELECT ordinal,section,text FROM chunks"
+                              " WHERE source_id=? ORDER BY ordinal", (source_id,)).fetchall()
+        return jsonify({"source": dict(src), "chunks": [dict(row) for row in rows]})
 
     @app.post("/api/kb")
     def kb_upload():
@@ -326,9 +446,18 @@ def create_app() -> Flask:
 
         def stream():
             yield sse({"type": "status", "text": "正在查找相关法律…"})
+            with database.connect() as db:
+                features = _load_settings(db)
             chunks = load_chunks()
-            retrieval = retrieve(question, chunks, fts_lookup(terms(question)), embedder, limit=6)
-            if not retrieval["hits"]:
+            retrieval = retrieve(question, chunks, fts_lookup(terms(question)),
+                                 embedder if features["vector"] else None,
+                                 limit=6, use_gate=features["jev"])
+            online_hits = (pkulaw.search(question)
+                           if features["pkulaw"] and pkulaw.configured else [])
+            backend = retrieval["backend"] + ("+pkulaw" if online_hits else "")
+            LOG.info("问答检索 · 本地 %d 段 · 在线 %d 段 · backend=%s",
+                     len(retrieval["hits"]), len(online_hits), backend)
+            if not retrieval["hits"] and not online_hits:
                 payload = {"content": "当前知识库未检索到足以回答的依据。请换个问法或补充关键词（如具体条文、罪名、情形）；我不会编造依据。",
                            "citations": [], "grounded": False,
                            "conversation_id": conversation_id,
@@ -343,9 +472,9 @@ def create_app() -> Flask:
                                 json.dumps({"grounded": False}), now_iso()))
                 yield sse({"type": "result", **payload})
                 return
-            evidence = qa.Evidence(retrieval["hits"], question)
+            evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
             messages = qa.build_messages(question, evidence, previous, recent_answers)
-            yield sse({"type": "status", "text": "正在生成回答…", "backend": retrieval["backend"]})
+            yield sse({"type": "status", "text": "正在生成回答…", "backend": backend})
             buffer = []
             try:
                 for kind, piece in qa_llm.stream(messages, temperature=0.15, max_tokens=3000):
@@ -357,7 +486,9 @@ def create_app() -> Flask:
                 return
             result = qa.sanitize_citations("".join(buffer), evidence.valid_labels)
             citations = [ref for ref in evidence.refs if ref["label"] in set(result["used"])]
-            notice = "回答仅参考本次检索到的知识库片段，以官方发布文本为准；不构成法律意见。"
+            notice = ("回答参考本地知识库与北大法宝在线检索（在线条目附原文链接）；均以官方发布文本为准，不构成法律意见。"
+                      if online_hits else
+                      "回答仅参考本次检索到的知识库片段，以官方发布文本为准；不构成法律意见。")
             if result["removed"]:
                 notice = f"已移除 {result['removed']} 处无效引用。" + notice
             elif not result["used"]:
@@ -370,13 +501,13 @@ def create_app() -> Flask:
                            " VALUES (?,?,?,?,?,?)",
                            (new_id(), conversation_id, "assistant", result["content"],
                             json.dumps({"citations": citations,
-                                        "backend": retrieval["backend"],
+                                        "backend": backend,
                                         "grounded": bool(result["used"]),
                                         "notice": notice}, ensure_ascii=False),
                             now_iso()))
             yield sse({"type": "result", "content": result["content"], "citations": citations,
                        "grounded": bool(result["used"]), "notice": notice,
-                       "backend": retrieval["backend"], "conversation_id": conversation_id})
+                       "backend": backend, "conversation_id": conversation_id})
 
         return Response(stream_with_context(stream()), mimetype="text/event-stream")
 

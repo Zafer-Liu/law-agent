@@ -12,3 +12,6 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+# Local deploy artifacts (secrets, db dumps, tarballs)
+.deploy/
+

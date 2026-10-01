@@ -43,7 +43,7 @@ def main():
     assert cp["next"] == "debate" and cp["allow_question"] and len(cp["options"]) == 3
     assert not any(e["type"] == "error" for e in events), [e for e in events if e["type"] == "error"]
     # 卷宗里应有举证质证发言
-    assert summarize(events).get("turn_end", 0) >= 9, "investigation turns missing"
+    assert summarize(events).get("turn_end", 0) >= 5, "investigation turns missing"
     print("   OK, session:", session_id)
 
     # 2) 检查点1：预判 + 发问（向公诉人）

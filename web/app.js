@@ -3,6 +3,9 @@
 (function () {
   "use strict";
 
+  // ---- 路径前缀：支持挂载在子路径（如 /law/）；根路径部署时为空串 ----
+  const API_BASE = location.pathname.replace(/\/[^/]*$/, "");
+
   // ---- 应用导航 ----
   const tabs = document.querySelectorAll(".tab");
   const panels = document.querySelectorAll(".tab-panel");
@@ -101,9 +104,11 @@
   });
 
   citationsToggle.addEventListener("click", () => {
-    if (!activeCitations.length) return;
     const open = !citationsRail.classList.contains("open");
-    if (open) showCitations(activeCitations);
+    if (open) {
+      if (activeCitations.length) showCitations(activeCitations);
+      else showSourceList();
+    }
     setCitationsOpen(open);
   });
   citationsClose.addEventListener("click", () => setCitationsOpen(false));
@@ -155,7 +160,7 @@
     let resultEvent = null;
 
     try {
-      const res = await fetch("/api/ask", {
+      const res = await fetch(API_BASE + "/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, conversation_id: conversationId, client_id: clientId }),
@@ -232,7 +237,7 @@
 
   async function refreshConversations() {
     try {
-      const res = await fetch(`/api/conversations?client_id=${encodeURIComponent(clientId)}`);
+      const res = await fetch(`${API_BASE}/api/conversations?client_id=${encodeURIComponent(clientId)}`);
       if (!res.ok) throw new Error("history request failed");
       const data = await res.json();
       conversations = data.conversations || [];
@@ -290,7 +295,7 @@
     messagesEl.innerHTML = '<div class="conversation-loading">正在载入对话…</div>';
     clearCitations();
     try {
-      const res = await fetch(`/api/conversations/${encodeURIComponent(id)}?client_id=${encodeURIComponent(clientId)}`);
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}?client_id=${encodeURIComponent(clientId)}`);
       if (!res.ok) throw new Error("conversation request failed");
       const data = await res.json();
       if (!data.conversation) throw new Error("conversation missing");
@@ -343,8 +348,9 @@
 
   function clearCitations() {
     setAvailableCitations([]);
-    citationsList.replaceChildren();
-    setCitationsOpen(false);
+    // 无引用时回退为资料列表，面板保持可翻看
+    if (citationsRail.classList.contains("open")) showSourceList();
+    else citationsList.replaceChildren();
   }
 
   function setAvailableCitations(citations) {
@@ -352,15 +358,12 @@
     const count = activeCitations.length;
     citationsCount.textContent = count ? String(count) : "";
     citationsPanelCount.textContent = count ? `${count} 条` : "";
-    citationsToggle.disabled = count === 0;
-    if (!count) setCitationsOpen(false);
   }
 
   function setCitationsOpen(open) {
-    const expanded = Boolean(open && activeCitations.length);
-    citationsRail.classList.toggle("open", expanded);
-    citationsPanel.hidden = !expanded;
-    citationsToggle.setAttribute("aria-expanded", String(expanded));
+    citationsRail.classList.toggle("open", Boolean(open));
+    citationsPanel.hidden = !open;
+    citationsToggle.setAttribute("aria-expanded", String(Boolean(open)));
   }
 
   refreshConversations();
@@ -598,6 +601,12 @@
   function showCitations(citations) {
     const displayCitations = citations.flatMap(expandLegacyCitation);
     citationsList.replaceChildren();
+    const browseAll = document.createElement("button");
+    browseAll.type = "button";
+    browseAll.className = "kb-back";
+    browseAll.textContent = "← 浏览全部资料";
+    browseAll.addEventListener("click", () => showSourceList());
+    citationsList.appendChild(browseAll);
     citationsPanelCount.textContent = `${displayCitations.length} 条`;
     displayCitations.forEach((c) => {
       const sectionParts = String(c.section || "").split(/\s+\/\s+/).filter(Boolean);
@@ -610,12 +619,105 @@
         <div class="citation-meta">
           <span class="label">${escapeHtml(c.label)}</span>
           ${article ? `<strong class="article">${escapeHtml(article)}</strong>` : ""}
+          ${c.url ? '<span class="citation-badge">在线</span>' : ""}
         </div>
-        <p class="citation-source">${escapeHtml(source)}</p>
+        <p class="citation-source">${escapeHtml(source)}${c.timeliness ? `（${escapeHtml(c.timeliness)}）` : ""}</p>
         <p class="excerpt">${escapeHtml(c.excerpt || "暂无可展示的原文片段")}</p>
       `;
+      if (c.url) {
+        const link = document.createElement("a");
+        link.className = "citation-link";
+        link.href = c.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "查看北大法宝原文 ↗";
+        item.appendChild(link);
+      }
       citationsList.appendChild(item);
     });
+  }
+
+  // ---- 法律原文浏览：不发起对话也能翻看知识库资料 ----
+  let kbSourcesCache = null;
+
+  async function showSourceList() {
+    citationsPanelCount.textContent = "";
+    if (!kbSourcesCache) {
+      renderKbNotice("正在载入资料列表…");
+      try {
+        const res = await fetch(`${API_BASE}/api/kb`);
+        if (!res.ok) throw new Error("kb request failed");
+        const data = await res.json();
+        kbSourcesCache = data.sources || [];
+      } catch {
+        renderKbNotice("资料列表载入失败，请稍后重试");
+        return;
+      }
+    }
+    citationsList.replaceChildren();
+    kbSourcesCache.forEach((source) => {
+      const item = document.createElement("article");
+      item.className = "citation-item kb-source";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "kb-source-btn";
+      const title = document.createElement("span");
+      title.className = "kb-source-title";
+      title.textContent = cleanCitationSource(source.title);
+      const meta = document.createElement("span");
+      meta.className = "kb-source-meta";
+      meta.textContent = `${source.chunk_count} 段`;
+      btn.append(title, meta);
+      btn.addEventListener("click", () => showSourceDetail(source.id));
+      item.appendChild(btn);
+      citationsList.appendChild(item);
+    });
+  }
+
+  async function showSourceDetail(id) {
+    const known = (kbSourcesCache || []).find((s) => s.id === id);
+    renderKbNotice(`正在载入《${known ? known.title : "法律资料"}》…`);
+    try {
+      const res = await fetch(`${API_BASE}/api/kb/${encodeURIComponent(id)}`);
+      if (!res.ok) throw new Error("kb detail request failed");
+      const data = await res.json();
+      citationsList.replaceChildren();
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "kb-back";
+      back.textContent = "← 返回资料列表";
+      back.addEventListener("click", () => showSourceList());
+      citationsList.appendChild(back);
+      const doc = document.createElement("article");
+      doc.className = "kb-doc";
+      const heading = document.createElement("h4");
+      heading.className = "kb-doc-title";
+      heading.textContent = cleanCitationSource(data.source.title);
+      doc.appendChild(heading);
+      (data.chunks || []).forEach((chunk) => {
+        if (chunk.section) {
+          const section = document.createElement("h5");
+          section.className = "kb-chunk-section";
+          section.textContent = chunk.section;
+          doc.appendChild(section);
+        }
+        const text = document.createElement("p");
+        text.className = "kb-chunk-text";
+        text.textContent = chunk.text;
+        doc.appendChild(text);
+      });
+      citationsList.appendChild(doc);
+    } catch {
+      renderKbNotice("原文载入失败，请稍后重试");
+    }
+  }
+
+  function renderKbNotice(text) {
+    citationsList.replaceChildren();
+    const notice = document.createElement("p");
+    notice.className = "kb-notice";
+    notice.textContent = text;
+    citationsList.appendChild(notice);
   }
 
   function cleanCitationSource(value) {
@@ -664,4 +766,137 @@
     el.hidden = false;
     setTimeout(() => { el.hidden = true; }, 3000);
   };
+
+  // ---- 设置与诊断：检索增强开关 + 运行日志 ----
+  const settingsButton = document.getElementById("settings-button");
+  const settingsDrawer = document.getElementById("settings-drawer");
+  const settingsBackdrop = document.getElementById("settings-backdrop");
+  const settingsClose = document.getElementById("settings-close");
+  const settingsFeatures = document.getElementById("settings-features");
+  const settingsLog = document.getElementById("settings-log");
+  const logsRefresh = document.getElementById("logs-refresh");
+  const FEATURE_META = {
+    vector: { title: "语义检索", desc: "向量模型参与检索排序（RRF 融合）" },
+    jev: { title: "JEV 门控", desc: "检索质量门控：过滤低相关与提示注入片段" },
+    pkulaw: { title: "MCP · 北大法宝", desc: "问答时在线语义检索权威法条（消耗积分）" },
+  };
+  let logsTimer = null;
+
+  function setSettingsOpen(open) {
+    settingsDrawer.hidden = !open;
+    settingsBackdrop.hidden = !open;
+    settingsButton.setAttribute("aria-expanded", String(open));
+    if (open) {
+      loadSettings();
+      loadLogs();
+      logsTimer = setInterval(loadLogs, 5000);
+    } else if (logsTimer) {
+      clearInterval(logsTimer);
+      logsTimer = null;
+    }
+  }
+
+  async function loadSettings() {
+    settingsFeatures.replaceChildren(renderSettingNotice("正在读取服务状态…"));
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`);
+      if (!res.ok) throw new Error("settings request failed");
+      renderFeatures((await res.json()).features || {});
+    } catch {
+      settingsFeatures.replaceChildren(renderSettingNotice("服务状态读取失败，请稍后重试"));
+    }
+  }
+
+  function renderFeatures(features) {
+    settingsFeatures.replaceChildren();
+    Object.keys(FEATURE_META).forEach((key) => {
+      const meta = FEATURE_META[key];
+      const state = features[key] || { enabled: false, configured: false, model: "", note: "" };
+      const row = document.createElement("div");
+      row.className = "setting-row";
+      if (!state.configured) row.classList.add("unavailable");
+      const info = document.createElement("div");
+      info.className = "setting-info";
+      const title = document.createElement("strong");
+      title.textContent = meta.title;
+      const desc = document.createElement("small");
+      desc.textContent = state.configured
+        ? (state.model ? `${meta.desc} · ${state.model}` : meta.desc)
+        : (state.note || meta.desc);
+      info.append(title, desc);
+      const toggleLabel = document.createElement("label");
+      toggleLabel.className = "setting-toggle";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = Boolean(state.enabled);
+      input.disabled = !state.configured;
+      input.setAttribute("aria-label", `${meta.title} 开关`);
+      input.addEventListener("change", () => updateSetting(key, input.checked));
+      const track = document.createElement("span");
+      track.className = "setting-track";
+      track.setAttribute("aria-hidden", "true");
+      toggleLabel.append(input, track);
+      row.append(info, toggleLabel);
+      settingsFeatures.appendChild(row);
+    });
+  }
+
+  async function updateSetting(key, enabled) {
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: enabled }),
+      });
+      if (!res.ok) throw new Error("settings update failed");
+      window.toast(`${FEATURE_META[key].title} 已${enabled ? "开启" : "关闭"}`);
+    } catch {
+      window.toast("设置保存失败，请稍后重试");
+      loadSettings();
+    }
+  }
+
+  async function loadLogs() {
+    try {
+      const res = await fetch(`${API_BASE}/api/logs`);
+      if (!res.ok) throw new Error("logs request failed");
+      const logs = (await res.json()).logs || [];
+      if (!logs.length) {
+        settingsLog.replaceChildren(renderSettingNotice("暂无日志"));
+        return;
+      }
+      settingsLog.replaceChildren();
+      logs.forEach((entry) => {
+        const line = document.createElement("div");
+        line.className = `log-line log-${(entry.level || "INFO").toLowerCase()}`;
+        const time = document.createElement("span");
+        time.className = "log-time";
+        time.textContent = `${entry.time} ${entry.name}`;
+        const message = document.createElement("span");
+        message.className = "log-msg";
+        message.textContent = entry.message;
+        line.append(time, message);
+        settingsLog.appendChild(line);
+      });
+      settingsLog.scrollTop = 0;
+    } catch {
+      settingsLog.replaceChildren(renderSettingNotice("日志读取失败，请稍后重试"));
+    }
+  }
+
+  function renderSettingNotice(text) {
+    const notice = document.createElement("p");
+    notice.className = "settings-hint";
+    notice.textContent = text;
+    return notice;
+  }
+
+  settingsButton.addEventListener("click", () =>
+    setSettingsOpen(settingsDrawer.hidden));
+  settingsClose.addEventListener("click", () => setSettingsOpen(false));
+  settingsBackdrop.addEventListener("click", () => setSettingsOpen(false));
+  logsRefresh.addEventListener("click", loadLogs);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !settingsDrawer.hidden) setSettingsOpen(false);
+  });
 })();

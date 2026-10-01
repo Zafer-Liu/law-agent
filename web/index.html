@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#c8281e">
   <title>法晓 · AI 法律助手</title>
-  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23c8281e'/%3E%3Ctext x='32' y='45' font-size='36' text-anchor='middle' fill='%23ffffff' font-family='system-ui,sans-serif' font-weight='600'%3E法%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/styles.css">
 </head>
 <body>
   <header class="topbar">
@@ -19,6 +20,14 @@
       <button id="tab-button-court" class="tab" data-tab="court" role="tab"
         aria-selected="false" aria-controls="tab-court">模拟法庭</button>
     </nav>
+    <button id="settings-button" class="settings-button" type="button"
+      aria-label="打开设置面板" aria-expanded="false" aria-controls="settings-drawer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
   </header>
 
   <!-- ==================== 法律问答 Tab ==================== -->
@@ -99,17 +108,17 @@
         </div>
       </section>
 
-      <aside id="citations-rail" class="citations-rail" aria-label="引用依据">
-        <button id="citations-toggle" class="citations-toggle" type="button" disabled
+      <aside id="citations-rail" class="citations-rail" aria-label="法律原文">
+        <button id="citations-toggle" class="citations-toggle" type="button"
           aria-controls="qa-citations" aria-expanded="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 4.75h9A1.75 1.75 0 0 1 16.25 6.5v12.75h-9A1.75 1.75 0 0 1 5.5 17.5V4.75Z"/><path d="M16.25 7.25H18.5v12h-9"/></svg>
-          <span>依据</span>
+          <span>法律原文</span>
           <span id="citations-count" class="citations-count"></span>
         </button>
         <section id="qa-citations" class="citations-panel" aria-labelledby="citations-title" hidden>
           <div class="citations-head">
-            <h3 id="citations-title">引用依据 <span id="citations-panel-count" class="citations-panel-count"></span></h3>
-            <button id="citations-close" class="close-btn" type="button" aria-label="折叠引用依据">
+            <h3 id="citations-title">法律原文 <span id="citations-panel-count" class="citations-panel-count"></span></h3>
+            <button id="citations-close" class="close-btn" type="button" aria-label="折叠法律原文">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
             </button>
           </div>
@@ -126,8 +135,8 @@
     <div id="court-select" class="court-select">
       <span class="section-kicker">模拟法庭</span>
       <h2>选择案件，开始庭审</h2>
-      <p class="muted">选择案件即可入庭。你将以人民陪审员身份观察控辩双方的多智能体对抗、两次作出预判，并在最后与裁判思路对照。</p>
-      <p class="court-safety">完整体验约 10 分钟；中途可退出，庭审记录不会影响下一次体验。</p>
+      <p class="muted">选择案件后，可以全程旁听，也可担任陪审员或诉讼角色，在关键节点亲自参与。</p>
+      <p class="court-safety">完整体验约 5 分钟；中途可暂停或退出，庭审记录不会影响下一次体验。</p>
       <div id="case-cards" class="case-cards"></div>
     </div>
 
@@ -136,8 +145,13 @@
       <button id="role-back" class="back-btn" type="button">返回案件列表</button>
       <span class="section-kicker">选择庭审身份</span>
       <h2 id="role-case-title"></h2>
-      <p class="muted">不同角色拥有不同任务。诉讼角色将在两个关键节点由你亲自发言，其余回合由 AI 协助推进。</p>
+      <p class="muted">想轻松看完全程可选“旁听观众”；选择诉讼角色后，关键发言会直接出现在庭审中央。</p>
       <div class="role-options" aria-label="庭审角色">
+        <button class="role-option audience-option" type="button" aria-pressed="false" data-role="audience">
+          <span class="role-sigil" aria-hidden="true">观</span>
+          <span class="role-copy"><strong>旁听观众</strong><small>不打断庭审流程，全程观看控辩交锋，最后作出裁判预测</small></span>
+          <span class="role-tag">轻松旁听</span>
+        </button>
         <button class="role-option" type="button" aria-pressed="false" data-role="juror">
           <span class="role-sigil" aria-hidden="true">陪</span>
           <span class="role-copy"><strong>人民陪审员</strong><small>观察控辩、两次预判、当庭发问并参与最终评议</small></span>
@@ -166,7 +180,14 @@
           <h2 id="court-title"></h2>
           <span id="court-phase" class="phase-badge"></span>
           <span id="court-player-role" class="player-role-badge"></span>
-          <button id="court-exit" class="text-btn" type="button">退出本次模拟</button>
+          <div class="court-actions">
+            <button id="court-pause" class="text-btn pause-btn" type="button" aria-pressed="false" disabled>
+              <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6v12M16 6v12"/></svg>
+              <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m9 6 9 6-9 6V6Z"/></svg>
+              <span>暂停庭审</span>
+            </button>
+            <button id="court-exit" class="text-btn" type="button">退出本次模拟</button>
+          </div>
         </div>
         <ol id="phase-steps" class="phase-steps">
           <li data-phase="opening">开庭</li>
@@ -205,7 +226,8 @@
                 <span id="speech-badge" class="speech-sigil" aria-hidden="true">审</span>
                 <span id="speech-name">审判长</span>
               </div>
-              <div id="speech-text" class="speech-text">法槌即将落下，庭审马上开始…</div>
+              <div id="speech-text" class="speech-text" aria-live="polite">法槌即将落下，庭审马上开始…</div>
+              <div id="checkpoint-panel" class="speech-action" hidden></div>
             </div>
             <div class="bench side-bench defender-bench" data-role="defender">
               <span class="emblem" aria-hidden="true">辩</span>
@@ -237,9 +259,6 @@
           </div>
         </aside>
       </div>
-
-      <!-- 检查点：陪审员预判与发问 -->
-      <div id="checkpoint-panel" class="checkpoint-panel" hidden></div>
 
       <!-- 庭审记录 -->
       <details class="court-log">
@@ -297,9 +316,34 @@
     </div>
   </main>
 
+  <!-- ==================== 设置与诊断抽屉 ==================== -->
+  <aside id="settings-drawer" class="settings-drawer" aria-label="设置与诊断" hidden>
+    <header class="settings-head">
+      <h2>设置与诊断</h2>
+      <button id="settings-close" class="close-btn" type="button" aria-label="关闭设置面板">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
+      </button>
+    </header>
+    <div class="settings-body">
+      <section class="settings-section" aria-label="检索增强开关">
+        <h3>检索增强</h3>
+        <p class="settings-hint">关闭立即生效（下次提问起），不影响服务器配置。</p>
+        <div id="settings-features" class="settings-features"></div>
+      </section>
+      <section class="settings-section" aria-label="运行日志">
+        <h3>运行日志
+          <button id="logs-refresh" class="logs-refresh" type="button">刷新</button>
+        </h3>
+        <p class="settings-hint">最近 200 条应用日志（内存暂存，服务重启后清空）。</p>
+        <div id="settings-log" class="settings-log" aria-live="polite"></div>
+      </section>
+    </div>
+  </aside>
+  <button id="settings-backdrop" class="settings-backdrop" type="button" aria-label="关闭设置面板" hidden></button>
+
   <div id="toast" class="toast" role="status" hidden></div>
 
-  <script src="/assets/app.js"></script>
-  <script src="/assets/court.js"></script>
+  <script src="assets/app.js"></script>
+  <script src="assets/court.js"></script>
 </body>
 </html>

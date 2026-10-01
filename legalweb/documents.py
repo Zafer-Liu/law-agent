@@ -107,6 +107,53 @@ def docx_to_markdown(path: Path) -> str:
     return result
 
 
+# 法条类纯文本的结构标记：编/章/节标题行、条、修正案的项
+_TXT_HEADING = re.compile(r"^第[零〇一二三四五六七八九十百]+(?P<kind>[编章节])[\s　]*(?P<title>\S.*)?$")
+_TXT_ARTICLE = re.compile(r"^[\s　]{0,6}(第[零〇一二三四五六七八九十百千]+条)")
+_TXT_ITEM = re.compile(r"^[\s　]{0,6}(?P<num>[一二三四五六七八九十]+、)")
+_TXT_HEADING_LEVEL = {"编": 1, "章": 2, "节": 3}
+
+
+def _txt_sections(text: str) -> list[dict]:
+    """纯文本按 编/章/节/条/项 切节；无结构标记的普通文本退回整篇「正文」。"""
+    sections: list[dict] = []
+    buffer: list[str] = []
+    headings: list[tuple[int, str]] = []
+    label = "正文"
+
+    def flush():
+        body = "\n".join(buffer).strip()
+        if body:
+            sections.append({"text": body, "section": label[:180], "page": None})
+        buffer.clear()
+
+    for line in text.splitlines():
+        if not line.strip():
+            buffer.append(line)
+            continue
+        stripped = line.strip()
+        heading = _TXT_HEADING.match(stripped) if len(stripped) <= 60 else None
+        if heading:
+            flush()
+            level = _TXT_HEADING_LEVEL[heading.group("kind")]
+            while headings and headings[-1][0] >= level:
+                headings.pop()
+            headings.append((level, stripped[:60]))
+            label = " / ".join(part for _, part in headings)
+            buffer.append(stripped)
+            continue
+        marker = _TXT_ARTICLE.match(line) or _TXT_ITEM.match(line)
+        if marker:
+            flush()
+            prefix = " / ".join(part for _, part in headings)
+            label = f"{prefix} / {marker.group(1)}" if prefix else marker.group(1)
+            buffer.append(line)
+            continue
+        buffer.append(line)
+    flush()
+    return sections
+
+
 def parse_document(path: Path, filename: str) -> list[dict]:
     suffix = Path(filename).suffix.lower()
     if suffix not in FORMATS:
@@ -133,7 +180,7 @@ def parse_document(path: Path, filename: str) -> list[dict]:
     if len(re.sub(r"[\W_]+", "", text)) < 30:
         raise ValueError("未找到足够的正文文字。")
     if suffix == ".txt":
-        return [{"text": text.strip(), "section": "正文", "page": None}]
+        return _txt_sections(text)
 
     sections, headings, buffer = [], [], []
     label = "正文"

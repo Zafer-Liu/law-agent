@@ -67,10 +67,18 @@ class EmbeddingClient:
         self.key = os.getenv("LAW_EMBED_API_KEY", "").strip()
         self.model = (os.getenv("LAW_EMBED_MODEL") or "bge-large-zh").strip()
         self.configured = bool(self.base and self.model)
+        # 接口风格：minimax 用 texts/type(db|query) 非对称向量，其余按 OpenAI input/data。
+        style = os.getenv("LAW_EMBED_STYLE", "").strip().lower()
+        host = (urlsplit(self.base).hostname or "").lower()
+        if style in {"openai", "minimax"}:
+            self.style = style
+        else:
+            self.style = "minimax" if ("minimax" in host or self.model.startswith("embo")) else "openai"
         # 复用连接池：远端 TLS 握手动辄数秒，热连接毫秒级返回。
         self.session = requests.Session()
 
-    def embed_texts(self, texts: list[str]) -> tuple[list[list[float]], str]:
+    def embed_texts(self, texts: list[str], kind: str = "db") -> tuple[list[list[float]], str]:
+        """kind 区分入库(db)与检索(query)向量，仅 minimax 风格生效。"""
         if not self.configured:
             raise ValueError("未配置向量模型，使用关键词检索。")
         url = api_url(self.base, "embeddings")
@@ -79,13 +87,23 @@ class EmbeddingClient:
             for offset in range(0, len(texts), 16):
                 batch = texts[offset:offset + 16]
                 headers = {"Authorization": "Bearer " + self.key} if self.key else {}
-                with self.session.post(url, json={"model": self.model, "input": batch},
-                                       headers=headers, timeout=(15, 30), allow_redirects=False) as response:
+                if self.style == "minimax":
+                    payload = {"model": self.model, "texts": batch, "type": kind}
+                else:
+                    payload = {"model": self.model, "input": batch}
+                with self.session.post(url, json=payload, headers=headers,
+                                       timeout=(15, 30), allow_redirects=False) as response:
                     response.raise_for_status()
-                    data = response.json()["data"]
-                if not isinstance(data, list) or len(data) != len(batch):
-                    raise ValueError("向量返回数量不匹配。")
-                mapping = {item["index"]: normalize(item["embedding"]) for item in data}
+                    data = response.json()
+                if self.style == "minimax":
+                    rows = data.get("vectors")
+                    if not isinstance(rows, list) or len(rows) != len(batch):
+                        raise ValueError("向量返回数量不匹配。")
+                    mapping = {index: normalize(row) for index, row in enumerate(rows)}
+                else:
+                    if not isinstance(data.get("data"), list) or len(data["data"]) != len(batch):
+                        raise ValueError("向量返回数量不匹配。")
+                    mapping = {item["index"]: normalize(item["embedding"]) for item in data["data"]}
                 if set(mapping) != set(range(len(batch))):
                     raise ValueError("向量索引不完整。")
                 for index in range(len(batch)):
@@ -118,8 +136,8 @@ def lexical_score(query: str, text: str) -> float:
     return phrase + english + chinese
 
 
-def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: EmbeddingClient,
-             limit=6, gate_hook=None) -> dict:
+def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: EmbeddingClient | None,
+             limit=6, gate_hook=None, use_gate=True) -> dict:
     if not chunks:
         return {"hits": [], "backend": "lexical+fts5", "degraded": True}
     allowed = {chunk["id"]: chunk for chunk in chunks}
@@ -127,8 +145,8 @@ def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: Embed
     vector_scores, vector_active = {}, False
     try:
         spaces = {chunk.get("embedding_space") for chunk in chunks if chunk.get("embedding")}
-        if embedder.configured and spaces:
-            vectors, space = embedder.embed_texts([query[:4000]])
+        if embedder is not None and embedder.configured and spaces:
+            vectors, space = embedder.embed_texts([query[:4000]], kind="query")
             q = vectors[0]
             for key, chunk in allowed.items():
                 value = chunk.get("embedding")
@@ -156,6 +174,7 @@ def retrieve(query: str, chunks: list[dict], fts_ids: list[int], embedder: Embed
         hit.update(rrf_score=round(scores[key], 4), lexical_score=round(lexical[key], 4),
                    vector_score=round(vector_scores.get(key, 0), 4))
         hits.append(hit)
-    hits = jev_gate.apply(query, hits, log_fn=gate_hook)
+    if use_gate:
+        hits = jev_gate.apply(query, hits, log_fn=gate_hook)
     return {"hits": hits, "backend": "vector+lexical+fts5" if vector_active else "lexical+fts5",
             "degraded": not vector_active}

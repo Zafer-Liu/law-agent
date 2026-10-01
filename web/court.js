@@ -16,6 +16,7 @@
   const speechName = document.getElementById("speech-name");
   const speechBadge = document.getElementById("speech-badge");
   const speechTextEl = document.getElementById("speech-text");
+  const speechZone = speechTextEl.closest(".speech-zone");
   const factsText = document.getElementById("facts-text");
   const disputeList = document.getElementById("dispute-list");
   const evidenceList = document.getElementById("evidence-list");
@@ -24,13 +25,22 @@
   const phaseSteps = document.getElementById("phase-steps");
   const playerRoleBadge = document.getElementById("court-player-role");
   const roleStart = document.getElementById("role-start");
+  const courtPause = document.getElementById("court-pause");
+  const courtPauseLabel = courtPause.querySelector("span");
 
   const roleMeta = {
+    audience: { name: "旁听观众", badge: "观" },
     juror: { name: "人民陪审员", badge: "陪" },
     prosecutor: { name: "公诉人", badge: "诉" },
     defender: { name: "辩护人", badge: "辩" },
     defendant: { name: "被告人", badge: "被" },
   };
+  const playbackTiming = Object.freeze({
+    line: { min: 1800, perCharacter: 55, max: 6000 },
+    segment: { min: 320, perCharacter: 42, max: 1400 },
+    turnHold: { min: 1600, perCharacter: 24, max: 4500 },
+    summary: { min: 1800, perCharacter: 45, max: 5000 },
+  });
 
   let currentCaseId = "";
   let selectedRole = "";
@@ -38,6 +48,10 @@
   let caseData = null;
   let pendingCheckpoint = null;      // 等待陪审员输入的检查点事件
   let trialAbortController = null;
+  let streamActive = false;
+  let trialPaused = false;
+  let pauseWaiters = [];
+  let statusBeforePause = null;
   let currentTurnText = "";          // 当前发言累计文本（识别证据编号用）
   let currentSpeaker = { role: "", name: "", badge: "" };
   const citedEvidence = new Set();   // 发言中出现过的证据编号
@@ -101,6 +115,8 @@
   }
 
   function resetTrialState() {
+    setTrialPaused(false);
+    setStreamActive(false);
     trialAbortController = null;
     sessionId = "";
     pendingCheckpoint = null;
@@ -116,6 +132,7 @@
     speechName.textContent = "审判长";
     speechBadge.textContent = "审";
     speechTextEl.textContent = "法槌即将落下，庭审马上开始…";
+    showSpeechText();
     setPhaseStep("");
     playerRoleBadge.textContent = "";
     document.querySelectorAll(".court-scene .bench").forEach((bench) => {
@@ -154,6 +171,9 @@
     document.querySelectorAll(".court-scene .bench").forEach((bench) => {
       bench.classList.toggle("is-player", bench.dataset.role === selectedRole);
     });
+    document.querySelector(".court-scene").classList.toggle("audience-view", selectedRole === "audience");
+    const jurorNote = document.querySelector(".juror-bench .bench-name small");
+    if (jurorNote) jurorNote.textContent = selectedRole === "juror" ? "你 · 人民陪审员" : "人民陪审员";
   }
 
   // ---- 卷宗面板 ----
@@ -172,9 +192,8 @@
       card.dataset.eid = ev.id;
       card.innerHTML = `
         <div class="ev-head">
-          <span class="ev-id">${escapeHtml(ev.id)}</span>
           <span class="ev-type">${escapeHtml(ev.type)}</span>
-          <button type="button" class="ev-star" aria-label="标注为关键证据" aria-pressed="false">☆</button>
+          <button type="button" class="ev-star" aria-label="将${escapeHtml(ev.type)}标注为关键证据" aria-pressed="false">☆</button>
         </div>
         <div class="ev-body">${escapeHtml(ev.content)}</div>
       `;
@@ -194,7 +213,7 @@
           card.classList.add("marked");
           star.textContent = "★";
           star.setAttribute("aria-pressed", "true");
-          toast(`已标注 ${ev.id} 为关键证据`);
+          toast(`已将“${ev.type}”标注为关键证据`);
         }
       });
       evidenceList.appendChild(card);
@@ -202,22 +221,29 @@
   }
 
   // ---- SSE 读取 ----
-  async function readSse(res, handler) {
+  async function readSse(res, handler, options = {}) {
+    const pausable = Boolean(options.pausable);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        let event;
-        try { event = JSON.parse(line.slice(6)); } catch { continue; }
-        handler(event);
+    if (pausable) setStreamActive(true);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let event;
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+          if (pausable) await waitWhilePaused();
+          await handler(event);
+        }
       }
+    } finally {
+      if (pausable) setStreamActive(false);
     }
   }
 
@@ -236,7 +262,7 @@
         toast(err.error || "庭审启动失败");
         return;
       }
-      await readSse(res, handleTrialEvent);
+      await readSse(res, handleTrialEvent, { pausable: true });
     } catch (err) {
       if (err.name === "AbortError") return;
       toast("庭审连接中断");
@@ -246,7 +272,7 @@
   }
 
   // ---- 庭审事件处理 ----
-  function handleTrialEvent(event) {
+  async function handleTrialEvent(event) {
     switch (event.type) {
       case "session":
         sessionId = event.session_id;
@@ -259,33 +285,39 @@
 
       case "line":
         // 审判长程序性台词（纯代码模板，一次性显示）
+        detectEvidence(event.text);
         setSpeech(event.role, event.name, event.badge, event.text);
         appendLog(event.role, event.name, event.text, event.player);
+        await readableDelay(event.text, playbackTiming.line);
         break;
 
       case "turn_start":
         currentSpeaker = { role: event.role, name: event.name, badge: event.badge };
         currentTurnText = "";
+        showSpeechText();
         setSpeaking(event.role, event.name, event.badge);
         speechTextEl.textContent = "";
         showStatus(`${event.name} 正在发言…`);
         break;
 
       case "delta":
-        speechTextEl.textContent += event.text;
+        speechTextEl.textContent += displayEvidenceNames(event.text);
         currentTurnText += event.text;
         detectEvidence(event.text);
         scrollSpeech();
+        await readableDelay(event.text, playbackTiming.segment);
         break;
 
       case "turn_end":
         hideStatus();
         appendLog(currentSpeaker.role, currentSpeaker.name, speechTextEl.textContent);
+        await readableDelay(currentTurnText, playbackTiming.turnHold);
         break;
 
       case "summary":
         setSpeech("clerk", "书记员", "书", `（书记员纪要）${event.text}`);
         appendLog("clerk", "书记员", event.text);
+        await readableDelay(event.text, playbackTiming.summary);
         break;
 
       case "checkpoint":
@@ -294,7 +326,7 @@
         break;
 
       case "resume":
-        checkpointPanel.hidden = true;
+        showSpeechText();
         break;
 
       case "await_deliberation":
@@ -317,11 +349,76 @@
           } else {
             pollHistory.pop();
           }
-          checkpointPanel.hidden = false;
+          showSpeechAction();
         }
         break;
     }
   }
+
+  function readableDelay(text, timing) {
+    const characterCount = Array.from(String(text || "").trim()).length;
+    const milliseconds = Math.min(timing.max,
+      Math.max(timing.min, characterCount * timing.perCharacter));
+    return presentationDelay(milliseconds);
+  }
+
+  function presentationDelay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  function showSpeechText() {
+    checkpointPanel.hidden = true;
+    speechTextEl.hidden = false;
+    speechZone.classList.remove("awaiting-input");
+  }
+
+  function showSpeechAction() {
+    speechTextEl.hidden = true;
+    checkpointPanel.hidden = false;
+    speechZone.classList.add("awaiting-input");
+    speechZone.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function setStreamActive(active) {
+    streamActive = active;
+    courtPause.disabled = !active;
+    if (!active) setTrialPaused(false);
+  }
+
+  function waitWhilePaused() {
+    if (!trialPaused) return Promise.resolve();
+    return new Promise((resolve) => pauseWaiters.push(resolve));
+  }
+
+  function setTrialPaused(paused) {
+    const next = Boolean(paused && streamActive);
+    if (trialPaused === next) return;
+    trialPaused = next;
+    courtPause.setAttribute("aria-pressed", String(next));
+    courtPause.classList.toggle("paused", next);
+    courtPauseLabel.textContent = next ? "继续庭审" : "暂停庭审";
+    courtPause.querySelector(".pause-icon").hidden = next;
+    courtPause.querySelector(".play-icon").hidden = !next;
+    speechZone.classList.toggle("playback-paused", next);
+    if (next) {
+      statusBeforePause = { hidden: courtStatus.hidden, text: courtStatusText.textContent };
+      showStatus("庭审已暂停，发言进度已保留");
+      return;
+    }
+    const waiting = pauseWaiters;
+    pauseWaiters = [];
+    waiting.forEach((resolve) => resolve());
+    if (statusBeforePause) {
+      courtStatusText.textContent = statusBeforePause.text;
+      courtStatus.hidden = statusBeforePause.hidden;
+      statusBeforePause = null;
+    }
+  }
+
+  courtPause.addEventListener("click", () => {
+    if (!streamActive) return;
+    setTrialPaused(!trialPaused);
+  });
 
   // ---- 场景渲染 ----
   function setSpeaking(role, name, badge) {
@@ -334,8 +431,21 @@
 
   function setSpeech(role, name, badge, text) {
     setSpeaking(role, name, badge);
-    speechTextEl.textContent = text;
+    speechTextEl.textContent = displayEvidenceNames(text);
     scrollSpeech();
+  }
+
+  function evidenceName(evidenceId) {
+    const evidence = (caseData?.dossier || []).find((item) => item.id === evidenceId);
+    return evidence?.type || evidenceId;
+  }
+
+  function displayEvidenceNames(text) {
+    return String(text || "").replace(/\bE\d+\b/g, (evidenceId) => evidenceName(evidenceId));
+  }
+
+  function displayMarkedEvidence() {
+    return Array.from(markedEvidence, (evidenceId) => evidenceName(evidenceId)).join("、");
   }
 
   function scrollSpeech() {
@@ -370,7 +480,7 @@
     const b = document.createElement("b");
     b.textContent = name + "：";
     line.appendChild(b);
-    line.appendChild(document.createTextNode(text));
+    line.appendChild(document.createTextNode(displayEvidenceNames(text)));
     logList.appendChild(line);
     logList.scrollTop = logList.scrollHeight;
   }
@@ -391,9 +501,6 @@
       return;
     }
     setSpeaking("juror", "人民陪审员（你）", "陪");
-    speechTextEl.textContent = cp.kind === "mid_review"
-      ? "轮到你了——请在下方记录你的阶段性预判，还可以就卷宗证据向控辩双方发问。"
-      : "听完控辩双方的对抗，请再次记录你的意见。";
 
     const card = document.createElement("div");
     card.className = "cp-card";
@@ -414,7 +521,7 @@
         <div class="cp-label">向当事人发问 <small>（可选，会被当庭作答）</small></div>
         <div class="cp-question">
           <textarea id="cp-question" rows="2" maxlength="200"
-            placeholder="例：E4 监控显示夺刀到追刺只有 11 秒，你凭什么认定侵害已经结束？"></textarea>
+            placeholder="例：监控视频显示夺刀到追刺只有 11 秒，你凭什么认定侵害已经结束？"></textarea>
           <div class="cp-target">
             发给：
             <label><input type="radio" name="cp-target" value="prosecutor" checked>公诉人</label>
@@ -428,8 +535,7 @@
     `;
     checkpointPanel.innerHTML = "";
     checkpointPanel.appendChild(card);
-    checkpointPanel.hidden = false;
-    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    showSpeechAction();
 
     let selected = "";
     card.querySelectorAll(".cp-option").forEach((btn) => {
@@ -444,61 +550,109 @@
 
   function renderRoleCheckpoint(cp) {
     setSpeaking(cp.role, `${cp.role_name}（你）`, cp.badge);
-    speechTextEl.textContent = `轮到你以${cp.role_name}身份发言。你的文字将直接进入庭审记录。`;
     const card = document.createElement("div");
     card.className = "cp-card role-cp-card";
+    const optionsHtml = (cp.options || []).map((option) => `
+      <button type="button" class="cp-option role-statement-option" data-id="${escapeHtml(option.id)}" aria-pressed="false">
+        <span class="cp-opt-label">${escapeHtml(option.label)}</span>
+        <span class="cp-opt-detail">${escapeHtml(option.detail)}</span>
+        <span class="cp-opt-statement">“${escapeHtml(displayEvidenceNames(option.statement))}”</span>
+      </button>`).join("");
     card.innerHTML = `
       <div class="cp-role-head">
         <span class="role-sigil" aria-hidden="true">${escapeHtml(cp.badge)}</span>
         <div><div class="cp-title">${escapeHtml(cp.title)}</div>
         <p class="cp-quote">${escapeHtml(cp.prompt)}</p></div>
       </div>
-      <label class="cp-label" for="cp-statement">你的发言 <small>（10-500 字，将记入庭审记录）</small></label>
-      <div class="cp-question">
+      <div class="cp-label">选择发言 <small>（预设内容可直接提交）</small></div>
+      <div class="cp-options role-statement-options">
+        ${optionsHtml}
+        <button type="button" class="cp-option custom-statement-option" data-id="custom" aria-pressed="false">
+          <span class="cp-opt-label">自定义发言</span>
+          <span class="cp-opt-detail">依据卷宗和庭审记录，用你自己的话表达。</span>
+        </button>
+      </div>
+      <div class="cp-question custom-statement" hidden>
+        <label class="cp-label" for="cp-statement">你的发言 <small>（10-500 字，将记入庭审记录）</small></label>
         <textarea id="cp-statement" rows="5" maxlength="500"
-          placeholder="${escapeHtml(cp.placeholder)}"></textarea>
+          placeholder="${escapeHtml(displayEvidenceNames(cp.placeholder))}"></textarea>
         <div class="statement-count"><span id="statement-count">0</span>/500</div>
       </div>
-      <button type="button" class="primary-btn" id="cp-submit" disabled>提交发言，继续庭审</button>
+      <button type="button" class="primary-btn" id="cp-submit" disabled>选择一项后继续</button>
     `;
     checkpointPanel.innerHTML = "";
     checkpointPanel.appendChild(card);
-    checkpointPanel.hidden = false;
+    showSpeechAction();
     const textarea = card.querySelector("#cp-statement");
     const submit = card.querySelector("#cp-submit");
+    const customArea = card.querySelector(".custom-statement");
+    let selected = "";
+    card.querySelectorAll(".cp-option").forEach((button) => {
+      button.addEventListener("click", () => {
+        selected = button.dataset.id;
+        card.querySelectorAll(".cp-option").forEach((item) => {
+          const active = item === button;
+          item.classList.toggle("selected", active);
+          item.setAttribute("aria-pressed", String(active));
+        });
+        const custom = selected === "custom";
+        customArea.hidden = !custom;
+        submit.disabled = custom ? textarea.value.trim().length < 10 : false;
+        submit.textContent = custom ? "提交自定义发言" : "采用这段发言，继续庭审";
+        if (custom) textarea.focus();
+      });
+    });
     textarea.addEventListener("input", () => {
       const length = textarea.value.trim().length;
       card.querySelector("#statement-count").textContent = String(length);
-      submit.disabled = length < 10;
+      if (selected === "custom") submit.disabled = length < 10;
     });
-    submit.addEventListener("click", () => submitRoleCheckpoint(cp, card));
-    card.scrollIntoView({ behavior: "smooth", block: "center" });
-    textarea.focus();
+    submit.addEventListener("click", () => submitRoleCheckpoint(cp, card, selected));
   }
 
-  async function submitRoleCheckpoint(cp, card) {
-    const statement = card.querySelector("#cp-statement").value.trim();
+  async function submitRoleCheckpoint(cp, card, selected) {
+    const preset = (cp.options || []).find((option) => option.id === selected);
+    const statement = selected === "custom"
+      ? card.querySelector("#cp-statement").value.trim()
+      : String(preset?.statement || "").trim();
     if (statement.length < 10) { toast("请至少写 10 个字"); return; }
+    const submit = card.querySelector("#cp-submit");
+    submit.disabled = true;
+    submit.textContent = "正在提交…";
+    const playerLineCount = logList.querySelectorAll(".player-line").length;
     roleContributions.push({ stage: cp.stage, title: cp.title });
-    checkpointPanel.hidden = true;
+    showSpeechText();
+    setSpeech(cp.role, `${cp.role_name}（你）`, cp.badge, statement);
+    const controller = new AbortController();
+    trialAbortController = controller;
     try {
       const res = await fetch(`/api/court/sessions/${sessionId}/continue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ statement }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast(err.error || "提交失败");
         roleContributions.pop();
-        checkpointPanel.hidden = false;
+        showSpeechAction();
+        submit.disabled = false;
+        submit.textContent = selected === "custom" ? "提交自定义发言" : "采用这段发言，继续庭审";
         return;
       }
-      await readSse(res, handleTrialEvent);
-    } catch {
+      await readSse(res, handleTrialEvent, { pausable: true });
+    } catch (error) {
+      if (error.name === "AbortError") return;
       roleContributions.pop();
+      const playerLines = logList.querySelectorAll(".player-line");
+      if (playerLines.length > playerLineCount) playerLines[playerLines.length - 1]?.remove();
       toast("网络错误");
-      checkpointPanel.hidden = false;
+      showSpeechAction();
+      submit.disabled = false;
+      submit.textContent = selected === "custom" ? "提交自定义发言" : "采用这段发言，继续庭审";
+    } finally {
+      if (trialAbortController === controller) trialAbortController = null;
     }
   }
 
@@ -515,23 +669,36 @@
     const opt = cp.options.find((o) => o.id === selected);
     pollHistory.push({ stage: cp.kind === "mid_review" ? "investigation" : "debate", label: opt.label });
 
-    checkpointPanel.hidden = true;
+    const submit = card.querySelector("#cp-submit");
+    submit.disabled = true;
+    submit.textContent = "正在提交…";
+    showSpeechText();
+    const controller = new AbortController();
+    trialAbortController = controller;
     try {
       const res = await fetch(`/api/court/sessions/${sessionId}/continue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast(err.error || "提交失败");
-        checkpointPanel.hidden = false;
+        showSpeechAction();
+        submit.disabled = false;
+        submit.textContent = cp.kind === "mid_review" ? "提交意见，继续庭审" : "记录意见，进入最后陈述";
         return;
       }
-      await readSse(res, handleTrialEvent);
-    } catch {
+      await readSse(res, handleTrialEvent, { pausable: true });
+    } catch (error) {
+      if (error.name === "AbortError") return;
       toast("网络错误");
-      checkpointPanel.hidden = false;
+      showSpeechAction();
+      submit.disabled = false;
+      submit.textContent = cp.kind === "mid_review" ? "提交意见，继续庭审" : "记录意见，进入最后陈述";
+    } finally {
+      if (trialAbortController === controller) trialAbortController = null;
     }
   }
 
@@ -544,10 +711,15 @@
     trialEl.hidden = true;
     deliberationEl.hidden = false;
     const isJuror = selectedRole === "juror";
-    document.getElementById("deliberation-title").textContent = isJuror ? "休庭评议" : "角色任务完成 · 裁判预测";
+    const isAudience = selectedRole === "audience";
+    document.getElementById("deliberation-title").textContent = isJuror
+      ? "休庭评议"
+      : isAudience ? "庭审结束 · 裁判预测" : "角色任务完成 · 裁判预测";
     document.getElementById("deliberation-intro").textContent = isJuror
       ? "作为人民陪审员，请根据庭审查明的事实与法律，独立作出你的评议。"
-      : `你已完成${roleMeta[selectedRole].name}的关键发言。现在请暂时跳出诉讼立场，作出最终裁判预测。`;
+      : isAudience
+        ? "你已完整旁听控辩双方的发言。现在请根据庭审内容，作出你的裁判预测。"
+        : `你已完成${roleMeta[selectedRole].name}的关键发言。现在请暂时跳出诉讼立场，作出最终裁判预测。`;
 
     // 预判轨迹 + 关键证据标注回顾
     const trajEl = document.getElementById("delib-traj");
@@ -559,7 +731,7 @@
       chips.push(trajChip(`已提交：${item.title}`));
     });
     if (markedEvidence.size) {
-      chips.push(trajChip(`关键证据：${Array.from(markedEvidence).join("、")}`, "final"));
+      chips.push(trajChip(`关键证据：${displayMarkedEvidence()}`, "final"));
     }
     trajEl.innerHTML = chips.join('<span class="traj-arrow">→</span>');
     trajEl.hidden = chips.length === 0;
@@ -620,7 +792,7 @@
 
       document.getElementById("verdict-yours").textContent =
         opt.label + (opt.convict ? `，量刑建议：${body.years} 年有期徒刑` : "")
-        + (markedEvidence.size ? `（关键证据：${Array.from(markedEvidence).join("、")}）` : "");
+        + (markedEvidence.size ? `（关键证据：${displayMarkedEvidence()}）` : "");
 
       try {
         const res = await fetch(`/api/court/sessions/${sessionId}/deliberation`, {
@@ -644,7 +816,7 @@
             document.getElementById("verdict-articles").textContent = event.real.articles.join("；");
             renderVerdictTrajectory(event);
           } else if (event.type === "delta") {
-            analysisEl.textContent += event.text;
+            analysisEl.textContent += displayEvidenceNames(event.text);
           } else if (event.type === "error") {
             toast(event.error);
           }

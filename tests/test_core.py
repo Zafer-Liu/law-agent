@@ -10,9 +10,14 @@ from unittest.mock import patch
 from werkzeug.exceptions import BadRequest
 
 from legalweb.app import create_app, text_value
+from legalweb.courtroom.agents import ROLES
+from legalweb.courtroom.cases import CASES
+from legalweb.courtroom.engine import PLAYER_ROLES, TrialEngine
 from legalweb.database import Database, new_id, now_iso
+from legalweb.documents import parse_document, split_sections
 from legalweb.llm import LLMClient
 from legalweb.qa import Evidence, sanitize_citations
+from legalweb.rag import retrieve
 
 
 class FakeResponse:
@@ -37,6 +42,13 @@ def sse_chunk(content):
 
 
 class CoreTests(unittest.TestCase):
+    class _CourtLLM:
+        def complete(self, _messages, **_kwargs):
+            return "依据卷宗证据，本方完成本轮庭审发言。"
+
+    class _NoEmbedding:
+        configured = False
+
     def test_ids_are_unique_in_a_tight_loop(self):
         ids = {new_id() for _ in range(10_000)}
         self.assertEqual(len(ids), 10_000)
@@ -117,6 +129,17 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(refs[0]["source"], "中华人民共和国测试法")
         self.assertEqual(refs[0]["excerpt"], "关键合同规则。")
 
+    def test_civil_code_marriage_book_is_bundled_and_retrievable(self):
+        path = next(Path("assset/law").glob("中华人民共和国民法典*.txt"))
+        chunks = split_sections(parse_document(path, path.name))
+        corpus = [{**chunk, "id": index, "source_title": "法条 · 中华人民共和国民法典",
+                   "embedding": None, "embedding_space": None}
+                  for index, chunk in enumerate(chunks, 1)]
+        with patch("legalweb.rag.jev_gate.apply", side_effect=lambda _query, hits, **_kwargs: hits):
+            result = retrieve("夫妻双方自愿离婚需要什么手续", corpus, [],
+                              self._NoEmbedding(), limit=6)
+        self.assertTrue(any("第一千零七十六条" in hit["text"] for hit in result["hits"]))
+
     def test_case_evidence_remains_one_citation(self):
         hits = [{
             "id": 8, "ordinal": 1, "section": "正文",
@@ -127,6 +150,34 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(refs), 1)
         self.assertEqual(refs[0]["source"], "某合同纠纷案")
         self.assertEqual(refs[0]["article"], "")
+
+    def test_audience_role_watches_full_trial_without_checkpoint(self):
+        self.assertIn("audience", PLAYER_ROLES)
+        engine = TrialEngine(CASES["haicheng"], self._CourtLLM(), player_role="audience")
+        events = list(engine.run())
+        self.assertFalse(any(event["type"] == "checkpoint" for event in events))
+        self.assertLessEqual(sum(event["type"] == "turn_start" for event in events), 10)
+        ending = next(event for event in events if event["type"] == "await_deliberation")
+        self.assertEqual(ending["player_role"], "audience")
+
+    def test_court_roles_use_distinct_language_registers(self):
+        self.assertIn("规范、严谨、克制的公诉语言", ROLES["prosecutor"]["system"])
+        self.assertIn("专业、准确、有针对性的辩护语言", ROLES["defender"]["system"])
+        self.assertIn("日常短句", ROLES["defendant"]["system"])
+        self.assertIn("规范、克制的裁判语言", ROLES["judge_review"]["system"])
+
+    def test_role_checkpoint_offers_two_presets_and_custom_can_be_supplied(self):
+        for role in ("prosecutor", "defender", "defendant"):
+            engine = TrialEngine(CASES["haicheng"], self._CourtLLM(), player_role=role)
+            events = list(engine._role_checkpoint("investigation", "debate"))
+            checkpoint = events[-1]
+            self.assertEqual(checkpoint["kind"], "role_input")
+            self.assertEqual(len(checkpoint["options"]), 2)
+            for option in checkpoint["options"]:
+                self.assertTrue(option["id"])
+                self.assertTrue(option["label"])
+                self.assertGreaterEqual(len(option["statement"]), 10)
+                self.assertLessEqual(len(option["statement"]), 500)
 
     def test_conversation_history_is_scoped_to_browser_identity(self):
         with tempfile.TemporaryDirectory() as directory:

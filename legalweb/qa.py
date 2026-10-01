@@ -45,7 +45,8 @@ def _article_fragments(hit: dict) -> list[dict]:
     text = (hit.get("text") or "").strip()
     source = hit.get("source_title", "")
     section = hit.get("section", "正文")
-    is_law = source.startswith("法条 ·") or bool(ARTICLE_IN_SECTION_RE.search(section))
+    is_law = (source.startswith(("法条 ·", "北大法宝 ·"))
+              or bool(ARTICLE_IN_SECTION_RE.search(section)))
     matches = list(ARTICLE_RE.finditer(text)) if is_law else []
     if not matches:
         section_article = ARTICLE_IN_SECTION_RE.search(section)
@@ -69,10 +70,14 @@ class Evidence:
         for hit_rank, hit in enumerate(hits):
             section = hit.get("section", "正文")
             source = _display_source(hit.get("source_title", ""), section)
+            # 在线检索等来源附带的展示字段（url、timeliness…）原样透传到引用
+            passthrough = {key: value for key, value in hit.items()
+                           if key not in ("text", "source_title", "section")}
             for fragment_rank, fragment in enumerate(_article_fragments(hit)):
                 article = fragment["article"]
                 excerpt = fragment["excerpt"]
                 candidates.append({
+                    **passthrough,
                     "chunk_id": hit["id"],
                     "source": source,
                     "article": article,

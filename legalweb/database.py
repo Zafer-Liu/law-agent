@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS court_sessions (
     created_at TEXT NOT NULL, finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS court_sessions_case ON court_sessions(case_id, created_at);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY, value TEXT NOT NULL
+);
 """
 
 

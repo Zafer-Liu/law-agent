@@ -1,0 +1,9 @@
+.deploy/
+.git/
+tests/
+docs/
+*.tgz
+*.md
+!README.md
+reindex_once.py
+test_court_e2e.py
