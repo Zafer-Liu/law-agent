@@ -10,7 +10,7 @@
 - Volume：`web-volume`（ID `fa5b2845-2b0f-47f6-8e50-a22c1c9969f0`，5GB）挂载 `/data`
 - 健康检查：`GET /health`（timeout 300s，restart ON_FAILURE max 10）
 - 启动方式：根目录 `Procfile`，并由 `railway.toml` 保留同等配置
-- 部署方式：本机 `railway up`（CLI 在 `E:\Tool\railway-cli\node_modules\.bin\railway`；上传遵循 `.gitignore` 与 `.railwayignore`，`.deploy/` 密钥与数据库备份两边都已排除）
+- 部署方式：**GitHub 仓库联动**（2026-10-01 起）——私有仓库 `Zafer-Liu/law-agent`（branch `main`）已通过 GraphQL `serviceConnect` 挂到 web 服务，**push 到 main 即自动构建部署**（Railway GitHub App 已装在账号上；auto-deploy 触发器已占用该服务唯一名额，无需另开）。应急时仍可本机 `railway up` 手动部署（CLI 在 `E:\Tool\railway-cli\node_modules\.bin\railway`；上传遵循 `.gitignore` 与 `.railwayignore`，`.deploy/` 密钥与数据库备份两边都已排除）
 
 生产启动命令：
 
@@ -77,7 +77,7 @@ node --check web\court.js
 git status --short
 ```
 
-提交并推送后，可由 GitHub 集成自动部署；需要从已关联工作区手动部署时：
+提交并 `git push origin main`，Railway 自动拉取构建（构建器现为 RAILPACK/V3，`Procfile` 提供启动命令，卷与重启策略不受影响）；在 Railway 控制台或 `railway status` 等最新 deployment 变 Online。需要从本机绕过 Git 手动部署时：
 
 ```powershell
 railway status
