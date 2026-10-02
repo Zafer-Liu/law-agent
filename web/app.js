@@ -182,6 +182,13 @@
       });
 
       if (!res.ok) {
+        if (res.status === 401) {
+          input.value = question; // 未登录：问题放回输入框，登录后可直接重发
+          stream.fail("登录后即可提问");
+          window.dispatchEvent(new CustomEvent("pet:error"));
+          window.dispatchEvent(new CustomEvent("auth:request-login"));
+          return;
+        }
         const err = await res.json().catch(() => ({}));
         stream.fail(err.error || "暂时无法回答，请稍后再试。");
         window.dispatchEvent(new CustomEvent("pet:error"));
@@ -258,6 +265,13 @@
   async function refreshConversations() {
     try {
       const res = await fetch(`${API_BASE}/api/conversations?client_id=${encodeURIComponent(clientId)}`);
+      if (res.status === 401) {
+        conversations = [];
+        conversationTotal.textContent = "";
+        conversationEmpty.textContent = "登录后可同步历史对话";
+        conversationEmpty.hidden = false;
+        return;
+      }
       if (!res.ok) throw new Error("history request failed");
       const data = await res.json();
       conversations = data.conversations || [];
@@ -316,6 +330,11 @@
     clearCitations();
     try {
       const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}?client_id=${encodeURIComponent(clientId)}`);
+      if (res.status === 401) {
+        window.toast("登录后可查看历史对话");
+        window.dispatchEvent(new CustomEvent("auth:request-login"));
+        throw new Error("unauthorized");
+      }
       if (!res.ok) throw new Error("conversation request failed");
       const data = await res.json();
       if (!data.conversation) throw new Error("conversation missing");
@@ -787,6 +806,135 @@
     setTimeout(() => { el.hidden = true; }, 3000);
   };
 
+  // ---- 账户体系：登录/注册/登出；未登录可浏览，写入类接口由服务端返回 401 ----
+  const authArea = document.getElementById("auth-area");
+  const authModal = document.getElementById("auth-modal");
+  const authBackdrop = document.getElementById("auth-backdrop");
+  const authClose = document.getElementById("auth-close");
+  const authForm = document.getElementById("auth-form");
+  const authUsername = document.getElementById("auth-username");
+  const authPassword = document.getElementById("auth-password");
+  const authHint = document.getElementById("auth-hint");
+  const authSubmit = document.getElementById("auth-submit");
+  const authTabLogin = document.getElementById("auth-tab-login");
+  const authTabRegister = document.getElementById("auth-tab-register");
+  let authUser = null;
+  let authMode = "login";
+
+  function setAuthMode(mode, hint = "") {
+    authMode = mode;
+    authTabLogin.classList.toggle("active", mode === "login");
+    authTabRegister.classList.toggle("active", mode === "register");
+    authTabLogin.setAttribute("aria-selected", String(mode === "login"));
+    authTabRegister.setAttribute("aria-selected", String(mode === "register"));
+    authSubmit.textContent = mode === "login" ? "登录" : "注册并登录";
+    authPassword.autocomplete = mode === "login" ? "current-password" : "new-password";
+    authHint.hidden = !hint;
+    authHint.textContent = hint;
+  }
+
+  function openAuth(mode = "login", hint = "") {
+    setAuthMode(mode, hint);
+    authModal.hidden = false;
+    authBackdrop.hidden = false;
+    authUsername.focus();
+  }
+
+  function closeAuth() {
+    authModal.hidden = true;
+    authBackdrop.hidden = true;
+    authPassword.value = "";
+  }
+
+  function renderAuthArea() {
+    authArea.replaceChildren();
+    if (authUser) {
+      const chip = document.createElement("span");
+      chip.className = "auth-chip";
+      chip.textContent = authUser.username;
+      const logout = document.createElement("button");
+      logout.type = "button";
+      logout.className = "auth-logout";
+      logout.textContent = "退出";
+      logout.addEventListener("click", async () => {
+        logout.disabled = true;
+        try {
+          await fetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
+        } catch { /* 网络异常也回到未登录态（整页刷新） */ }
+        location.reload();
+      });
+      authArea.append(chip, logout);
+    } else {
+      const login = document.createElement("button");
+      login.type = "button";
+      login.className = "auth-login-btn";
+      login.textContent = "登录";
+      login.addEventListener("click", () => openAuth("login"));
+      authArea.appendChild(login);
+    }
+  }
+
+  authTabLogin.addEventListener("click", () => setAuthMode("login"));
+  authTabRegister.addEventListener("click", () => setAuthMode("register"));
+  authClose.addEventListener("click", closeAuth);
+  authBackdrop.addEventListener("click", closeAuth);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !authModal.hidden) closeAuth();
+  });
+
+  authForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = authUsername.value.trim();
+    const password = authPassword.value;
+    if (username.length < 2) return setAuthMode(authMode, "请输入用户名（2-24 位）");
+    if (password.length < 6) return setAuthMode(authMode, "密码至少 6 位");
+    authSubmit.disabled = true;
+    try {
+      // client_id 用于把本浏览器匿名期的对话/桌宠数据并入新账户
+      const res = await fetch(`${API_BASE}/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, client_id: clientId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAuthMode(authMode, data.error || (authMode === "login" ? "登录失败，请重试" : "注册失败，请重试"));
+        return;
+      }
+      authUser = data.user;
+      closeAuth();
+      window.toast(authMode === "register"
+        ? `欢迎加入，${authUser.username}`
+        : `欢迎回来，${authUser.username}`);
+      renderAuthArea();
+      window.dispatchEvent(new CustomEvent("auth:changed", { detail: { user: authUser } }));
+      refreshConversations();
+    } catch {
+      setAuthMode(authMode, "网络错误，请重试");
+    } finally {
+      authSubmit.disabled = false;
+    }
+  });
+
+  async function loadAuth() {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/me`);
+      authUser = (await res.json()).user || null;
+    } catch {
+      authUser = null;
+    }
+    renderAuthArea();
+    if (authUser) {
+      // 页面加载时已登录：让桌宠等模块补拉账户数据
+      window.dispatchEvent(new CustomEvent("auth:changed", { detail: { user: authUser } }));
+    }
+  }
+  loadAuth();
+
+  window.addEventListener("auth:request-login", (event) => {
+    openAuth("login", (event.detail && event.detail.hint) || "");
+  });
+
   // ---- 设置与诊断：检索增强开关 + 运行日志 ----
   const settingsButton = document.getElementById("settings-button");
   const settingsDrawer = document.getElementById("settings-drawer");
@@ -820,6 +968,10 @@
     settingsFeatures.replaceChildren(renderSettingNotice("正在读取服务状态…"));
     try {
       const res = await fetch(`${API_BASE}/api/settings`);
+      if (res.status === 403) {
+        settingsFeatures.replaceChildren(renderSettingNotice("检索增强开关仅管理员可调整"));
+        return;
+      }
       if (!res.ok) throw new Error("settings request failed");
       renderFeatures((await res.json()).features || {});
     } catch {
@@ -837,13 +989,20 @@
       if (!state.configured) row.classList.add("unavailable");
       const info = document.createElement("div");
       info.className = "setting-info";
+      const titleLine = document.createElement("div");
+      titleLine.className = "setting-title-line";
       const title = document.createElement("strong");
       title.textContent = meta.title;
+      titleLine.appendChild(title);
+      if (state.configured && state.model) {
+        const chip = document.createElement("span");
+        chip.className = "setting-model-chip";
+        chip.textContent = state.model;
+        titleLine.appendChild(chip);
+      }
       const desc = document.createElement("small");
-      desc.textContent = state.configured
-        ? (state.model ? `${meta.desc} · ${state.model}` : meta.desc)
-        : (state.note || meta.desc);
-      info.append(title, desc);
+      desc.textContent = state.configured ? meta.desc : (state.note || meta.desc);
+      info.append(titleLine, desc);
       const toggleLabel = document.createElement("label");
       toggleLabel.className = "setting-toggle";
       const input = document.createElement("input");
@@ -879,6 +1038,10 @@
   async function loadLogs() {
     try {
       const res = await fetch(`${API_BASE}/api/logs`);
+      if (res.status === 403) {
+        settingsLog.replaceChildren(renderSettingNotice("运行日志仅管理员可查看"));
+        return;
+      }
       if (!res.ok) throw new Error("logs request failed");
       const logs = (await res.json()).logs || [];
       if (!logs.length) {
@@ -973,8 +1136,13 @@
       window.toast(`咨询记忆已${memorySetting.toggle.checked ? "开启" : "关闭"}`);
     });
 
+    // 咨询记忆相关的两行收进一张子卡片：授权开关 + 清空操作，和上面的显隐开关分开
+    const memoryCard = document.createElement("div");
+    memoryCard.className = "setting-subcard";
+    memoryCard.appendChild(memorySetting.row);
+
     const clearRow = document.createElement("div");
-    clearRow.className = "setting-row pet-memory-clear-row";
+    clearRow.className = "setting-subcard-action";
     const clearInfo = document.createElement("div");
     clearInfo.className = "setting-info";
     const clearTitle = document.createElement("strong");
@@ -990,8 +1158,9 @@
       window.dispatchEvent(new CustomEvent("pet:clear-memories"));
     });
     clearRow.append(clearInfo, clearButton);
+    memoryCard.appendChild(clearRow);
 
-    settingsPet.replaceChildren(visibleSetting.row, memorySetting.row, clearRow);
+    settingsPet.replaceChildren(visibleSetting.row, memoryCard);
   }
 
   settingsButton.addEventListener("click", () =>
@@ -999,6 +1168,15 @@
   settingsClose.addEventListener("click", () => setSettingsOpen(false));
   settingsBackdrop.addEventListener("click", () => setSettingsOpen(false));
   logsRefresh.addEventListener("click", loadLogs);
+  // 母标题折叠：三个栏目默认收起，点标题展开/收起各自的子内容
+  document.querySelectorAll(".settings-fold-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const expanded = btn.getAttribute("aria-expanded") === "true";
+      btn.setAttribute("aria-expanded", String(!expanded));
+      const panel = document.getElementById(btn.getAttribute("aria-controls") || "");
+      if (panel) panel.hidden = expanded;
+    });
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !settingsDrawer.hidden) setSettingsOpen(false);
   });

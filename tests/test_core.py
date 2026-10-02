@@ -179,25 +179,34 @@ class CoreTests(unittest.TestCase):
                 self.assertGreaterEqual(len(option["statement"]), 10)
                 self.assertLessEqual(len(option["statement"]), 500)
 
-    def test_conversation_history_is_scoped_to_browser_identity(self):
+    def test_conversation_history_is_scoped_to_account(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {"LAW_DATA_DIR": directory}), \
-                    patch("legalweb.app.seed_sources"):
+                    patch("legalweb.app.seed_sources"), \
+                    patch("legalweb.app.AUTH_RATE_MAX", 10_000):
                 app = create_app()
+            client = app.test_client()
+            client.post("/api/auth/register", json={
+                "username": "beta", "password": "secret123"})
+            mine = client.post("/api/auth/register", json={
+                "username": "alfa", "password": "secret123"}).get_json()["user"]
+            identity = f"u:{mine['id']}"
             database = Database(Path(directory))
             stamp = now_iso()
             with database.connect() as db:
-                for owner, conversation_id in (("browser-a", "conv-a"), ("browser-b", "conv-b")):
+                for owner, conversation_id in ((identity, "conv-a"), ("u:someone-else", "conv-b")):
                     db.execute("INSERT INTO conversations(id,title,owner_id,created_at)"
                                " VALUES (?,?,?,?)", (conversation_id, owner, owner, stamp))
                     db.execute("INSERT INTO messages(id,conversation_id,role,content,payload,created_at)"
                                " VALUES (?,?,?,?,?,?)",
-                               (new_id(), conversation_id, "user", f"question-{owner}", "{}", stamp))
-            client = app.test_client()
-            listing = client.get("/api/conversations?client_id=browser-a").get_json()
+                               (new_id(), conversation_id, "user", f"question-{conversation_id}", "{}", stamp))
+            listing = client.get("/api/conversations").get_json()
             self.assertEqual([item["id"] for item in listing["conversations"]], ["conv-a"])
             self.assertIsNone(client.get(
-                "/api/conversations/conv-b?client_id=browser-a").get_json()["conversation"])
+                "/api/conversations/conv-b").get_json()["conversation"])
+            # 匿名一律 401
+            anonymous = app.test_client()
+            self.assertEqual(anonymous.get("/api/conversations").status_code, 401)
 
 
 if __name__ == "__main__":

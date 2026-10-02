@@ -260,6 +260,7 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast(err.error || "庭审启动失败");
+        if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
         return;
       }
       await readSse(res, handleTrialEvent, { pausable: true });
@@ -635,6 +636,7 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast(err.error || "提交失败");
+        if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
         roleContributions.pop();
         showSpeechAction();
         submit.disabled = false;
@@ -685,6 +687,7 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast(err.error || "提交失败");
+        if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
         showSpeechAction();
         submit.disabled = false;
         submit.textContent = cp.kind === "mid_review" ? "提交意见，继续庭审" : "记录意见，进入最后陈述";
@@ -807,6 +810,7 @@
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           toast(err.error || "提交失败");
+          if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
           return;
         }
 

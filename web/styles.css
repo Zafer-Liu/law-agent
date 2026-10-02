@@ -623,6 +623,55 @@ button:active:not(:disabled) { transform: translateY(1px); }
   position: fixed; inset: 0; z-index: 210; display: block;
   border: 0; background: rgba(28,25,23,.28); cursor: default;
 }
+
+/* ---- 登录 / 注册 ---- */
+.auth-area { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.auth-login-btn {
+  min-height: 40px; padding: 8px 18px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--primary); background: var(--primary); color: #fff;
+  font-size: 13px; font-weight: 700; transition: background .15s;
+}
+.auth-login-btn:hover { background: var(--primary-dark); }
+.auth-chip {
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 5px 12px; border-radius: 999px; background: #f5f0ec;
+  border: 1px solid var(--border); color: var(--text); font-size: 13px; font-weight: 600;
+}
+.auth-logout {
+  min-height: 40px; padding: 8px 12px; border: none; border-radius: 8px;
+  background: none; color: var(--text-muted); font-size: 13px; cursor: pointer;
+}
+.auth-logout:hover { color: var(--primary); background: var(--primary-light); }
+.auth-backdrop {
+  position: fixed; inset: 0; z-index: 250; display: block;
+  border: 0; background: rgba(28,25,23,.34); cursor: default;
+}
+.auth-modal {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 260; width: min(92vw, 360px); padding: 0 22px 20px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(28,25,23,.22);
+  animation: authIn .22s cubic-bezier(.22,1,.36,1);
+}
+@keyframes authIn { from { opacity: 0; transform: translate(-50%, -48%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+.auth-head { display: flex; align-items: center; justify-content: space-between; padding-top: 14px; }
+.auth-head h2 { font-size: 17px; }
+.auth-tabs { display: flex; gap: 4px; margin: 14px 0 16px; padding: 4px; background: #f5f0ec; border-radius: 10px; }
+.auth-tab {
+  flex: 1; min-height: 38px; border: none; background: none; border-radius: 8px;
+  font-size: 13px; color: var(--text-muted); cursor: pointer;
+}
+.auth-tab.active { background: var(--surface); color: var(--primary); font-weight: 700; box-shadow: var(--shadow); }
+.auth-field { display: grid; gap: 6px; margin-bottom: 12px; }
+.auth-field span { font-size: 12px; color: var(--text-muted); }
+.auth-field input {
+  min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: #faf8f6; font-size: 14px; color: var(--text); font-family: var(--font);
+}
+.auth-field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.auth-hint { margin: 0 0 10px; color: var(--primary-dark); font-size: 12px; line-height: 1.5; }
+.auth-submit { width: 100%; min-height: 46px; }
+.auth-note { margin: 12px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
 .settings-drawer {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 220;
   width: min(92vw, 380px); display: flex; flex-direction: column;
@@ -641,8 +690,23 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .settings-section + .settings-section { border-top: 1px solid var(--border); }
 .settings-section h3 {
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 13px; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 4px;
+  font-size: 15px; color: var(--text); letter-spacing: .2px; margin-bottom: 4px;
 }
+/* 母标题折叠按钮：三个栏目默认收起，点标题展开子内容 */
+.settings-fold-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 0; border: 0; background: none;
+  color: var(--text); font: inherit; font-weight: 700;
+  cursor: pointer; user-select: none; border-radius: 6px;
+}
+.settings-fold-btn::before {
+  content: ""; width: 0; height: 0; flex: 0 0 auto;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  opacity: .55; transition: transform .15s;
+}
+.settings-fold-btn[aria-expanded="true"]::before { transform: rotate(90deg); }
+.settings-fold-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .logs-refresh {
   border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
   font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
@@ -650,10 +714,42 @@ button:active:not(:disabled) { transform: translateY(1px); }
 }
 .logs-refresh:hover { color: var(--primary); border-color: #dfa49e; }
 .settings-hint { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-bottom: 8px; }
-.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 0; }
-.setting-row + .setting-row { border-top: 1px solid var(--border); }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; }
+.setting-row + .setting-row { border-top: 1px solid #f0ebe6; }
 .setting-info { display: grid; gap: 3px; min-width: 0; }
 .setting-info strong { font-size: 14px; }
+.setting-title-line { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.setting-model-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #faf7f4;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 子卡片：把同主题的多行设置（如咨询记忆的授权 + 清空）收进一组 */
+.setting-subcard {
+  margin-top: 12px;
+  padding: 2px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #faf8f6;
+}
+.setting-subcard .setting-row { padding-left: 0; padding-right: 0; }
+.setting-subcard-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 11px 0 13px;
+  border-top: 1px dashed var(--border);
+}
 .setting-info small { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
 .setting-row.unavailable .setting-info strong { color: var(--text-muted); }
 .setting-toggle { position: relative; flex: 0 0 auto; display: inline-flex; }

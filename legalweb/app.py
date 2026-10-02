@@ -6,10 +6,11 @@ import logging
 import mimetypes
 import os
 import re
+import secrets
 import sqlite3
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
@@ -18,11 +19,13 @@ from flask import (
     Flask,
     Response,
     abort,
+    g,
     jsonify,
     request,
     send_from_directory,
     stream_with_context,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import qa
 from .courtroom import cases as court_cases
@@ -59,6 +62,32 @@ class _RingLogHandler(logging.Handler):
 
 _RING_LOG = _RingLogHandler()
 SETTING_KEYS = ("vector", "jev", "pkulaw")
+
+# ---- 账户体系：不透明会话令牌 Cookie（DB 存储，重启/重部署不掉线） ----
+AUTH_COOKIE = "law_session"
+AUTH_SESSION_DAYS = 30
+AUTH_USERNAME_RE = re.compile(r"^[A-Za-z0-9_\-一-鿿]{2,24}$")
+AUTH_PASSWORD_MIN, AUTH_PASSWORD_MAX = 6, 128
+AUTH_RATE_WINDOW = 300   # 认证端点限流窗口（秒），防爆破注册/登录
+AUTH_RATE_MAX = 30
+_auth_attempts: dict[str, deque] = {}
+_auth_attempts_lock = Lock()
+
+
+def _auth_rate_ok() -> bool:
+    """每 IP 滑动窗口限流；取 X-Forwarded-For 首跳以兼容 Railway 代理。"""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = (forwarded.split(",")[0].strip()
+          if forwarded.strip() else (request.remote_addr or "?"))
+    now = datetime.now(timezone.utc).timestamp()
+    with _auth_attempts_lock:
+        bucket = _auth_attempts.setdefault(ip, deque())
+        while bucket and bucket[0] < now - AUTH_RATE_WINDOW:
+            bucket.popleft()
+        if len(bucket) >= AUTH_RATE_MAX:
+            return False
+        bucket.append(now)
+        return True
 
 
 def _load_settings(db) -> dict:
@@ -346,8 +375,150 @@ def create_app() -> Flask:
                         "jev_configured": jev_configured(),
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
 
+    # ------------------------------------------------------------------
+    # 账户体系：注册/登录/登出；业务数据按 u:<user_id> 身份键隔离
+    # ------------------------------------------------------------------
+    def current_user() -> dict | None:
+        """从会话 Cookie 解析当前用户；每请求只查一次库（缓存在 flask.g）。"""
+        if "user" in g:
+            return g.user or None
+        token = request.cookies.get(AUTH_COOKIE, "")
+        user = None
+        if token:
+            with database.connect() as db:
+                row = db.execute(
+                    "SELECT u.id,u.username,u.is_admin FROM auth_sessions s"
+                    " JOIN users u ON u.id=s.user_id"
+                    " WHERE s.token=? AND s.expires_at>?",
+                    (token, now_iso())).fetchone()
+                if row:
+                    user = dict(row)
+        g.user = user
+        return user
+
+    def require_user() -> dict:
+        user = current_user()
+        if not user:
+            abort(401, "请先登录后再使用")
+        return user
+
+    def require_admin() -> dict:
+        user = require_user()
+        if not user["is_admin"]:
+            abort(403, "仅管理员可操作")
+        return user
+
+    def user_identity(user: dict) -> str:
+        return f"u:{user['id']}"
+
+    def public_user(user: dict) -> dict:
+        return {"id": user["id"], "username": user["username"],
+                "is_admin": bool(user["is_admin"])}
+
+    def issue_session(response, user_id: str) -> None:
+        """签发不透明令牌：落库 + httpOnly Cookie（30 天，HTTPS 下自动加 Secure）。"""
+        token = secrets.token_urlsafe(32)
+        expires = ((datetime.now(timezone.utc) + timedelta(days=AUTH_SESSION_DAYS))
+                   .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z")
+        with database.connect() as db:
+            db.execute("DELETE FROM auth_sessions WHERE expires_at<=?", (now_iso(),))
+            db.execute("INSERT INTO auth_sessions (token,user_id,created_at,expires_at)"
+                       " VALUES (?,?,?,?)", (token, user_id, now_iso(), expires))
+        secure = (request.is_secure
+                  or request.headers.get("X-Forwarded-Proto", "").lower() == "https")
+        response.set_cookie(AUTH_COOKIE, token, max_age=AUTH_SESSION_DAYS * 86400,
+                            httponly=True, samesite="Lax", secure=secure, path="/")
+
+    def claim_anonymous_data(db, client_id: str, identity: str) -> None:
+        """登录/注册时把本浏览器匿名期数据并入账户；会撞唯一键的行跳过。"""
+        if (len(client_id) < 8
+                or not re.fullmatch(r"[A-Za-z0-9._:-]+", client_id)
+                or client_id == identity):
+            return
+        db.execute("UPDATE conversations SET owner_id=? WHERE owner_id=?",
+                   (identity, client_id))
+        db.execute(
+            "UPDATE pet_progress SET client_id=? WHERE client_id=?"
+            " AND NOT EXISTS(SELECT 1 FROM pet_progress WHERE client_id=?)",
+            (identity, client_id, identity))
+        db.execute(
+            "UPDATE pet_memories SET client_id=? WHERE client_id=? AND ("
+            " source_event_id='' OR source_event_id NOT IN"
+            " (SELECT source_event_id FROM pet_memories WHERE client_id=?"
+            "  AND source_event_id<>''))",
+            (identity, client_id, identity))
+        db.execute(
+            "UPDATE pet_reward_events SET client_id=? WHERE client_id=? AND event_id NOT IN"
+            " (SELECT event_id FROM pet_reward_events WHERE client_id=?)",
+            (identity, client_id, identity))
+
+    @app.post("/api/auth/register")
+    def auth_register():
+        if not _auth_rate_ok():
+            abort(429, "尝试过于频繁，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        username = text_value(data, "username", limit=24).strip()
+        password = str(data.get("password") or "")
+        if not AUTH_USERNAME_RE.fullmatch(username):
+            abort(400, "用户名需为 2-24 位字母、数字、下划线或汉字")
+        if not AUTH_PASSWORD_MIN <= len(password) <= AUTH_PASSWORD_MAX:
+            abort(400, "密码需为 6-128 位")
+        with database.connect() as db:
+            if db.execute("SELECT 1 FROM users WHERE username=?",
+                          (username,)).fetchone():
+                abort(409, "用户名已被使用")
+            user_id = new_id()
+            is_admin = 1 if not db.execute("SELECT 1 FROM users").fetchone() else 0
+            db.execute("INSERT INTO users (id,username,password_hash,is_admin,created_at)"
+                       " VALUES (?,?,?,?,?)",
+                       (user_id, username, generate_password_hash(password),
+                        is_admin, now_iso()))
+            claim_anonymous_data(db, str(data.get("client_id") or ""), f"u:{user_id}")
+        LOG.info("新用户注册 · %s%s", username, "（管理员）" if is_admin else "")
+        response = jsonify({"user": {"id": user_id, "username": username,
+                                     "is_admin": bool(is_admin)}})
+        issue_session(response, user_id)
+        return response
+
+    @app.post("/api/auth/login")
+    def auth_login():
+        if not _auth_rate_ok():
+            abort(429, "尝试过于频繁，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        username = text_value(data, "username", limit=24).strip()
+        password = str(data.get("password") or "")
+        with database.connect() as db:
+            row = db.execute("SELECT * FROM users WHERE username=?",
+                             (username,)).fetchone()
+            if not row or not check_password_hash(row["password_hash"], password):
+                abort(401, "用户名或密码不正确")
+            claim_anonymous_data(db, str(data.get("client_id") or ""),
+                                 f"u:{row['id']}")
+        response = jsonify({"user": public_user(dict(row))})
+        issue_session(response, row["id"])
+        return response
+
+    @app.post("/api/auth/logout")
+    def auth_logout():
+        token = request.cookies.get(AUTH_COOKIE, "")
+        if token:
+            with database.connect() as db:
+                db.execute("DELETE FROM auth_sessions WHERE token=?", (token,))
+        response = jsonify({"ok": True})
+        response.delete_cookie(AUTH_COOKIE, path="/")
+        return response
+
+    @app.get("/api/auth/me")
+    def auth_me():
+        user = current_user()
+        return jsonify({"user": public_user(user) if user else None})
+
+    # ------------------------------------------------------------------
+    # 诊断：设置与日志（全局开关，仅管理员）
+    # ------------------------------------------------------------------
     @app.get("/api/settings")
     def get_settings():
+        require_admin()
         with database.connect() as db:
             enabled = _load_settings(db)
         return jsonify({"features": {
@@ -367,6 +538,7 @@ def create_app() -> Flask:
 
     @app.post("/api/settings")
     def update_settings():
+        require_admin()
         data = request.get_json(force=True, silent=True) or {}
         updates = {key: bool(data[key]) for key in SETTING_KEYS if key in data}
         if not updates:
@@ -382,6 +554,7 @@ def create_app() -> Flask:
 
     @app.get("/api/logs")
     def recent_logs():
+        require_admin()
         return jsonify({"logs": list(reversed(_RING_LOG.records))})
 
     # ------------------------------------------------------------------
@@ -453,6 +626,7 @@ def create_app() -> Flask:
 
     @app.post("/api/kb")
     def kb_upload():
+        require_admin()  # 知识库写入影响全体用户并消耗向量化额度
         file = request.files.get("file")
         if file is None:
             abort(400, "缺少上传文件")
@@ -477,12 +651,6 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # 法律问答
     # ------------------------------------------------------------------
-    def client_identity(data) -> str:
-        client_id = text_value(data, "client_id", limit=128)
-        if len(client_id) < 8 or not re.fullmatch(r"[A-Za-z0-9._:-]+", client_id):
-            abort(400, "缺少有效的客户端标识")
-        return client_id
-
     def request_identity(data) -> str:
         request_id = text_value(data, "request_id", limit=128)
         if not request_id:
@@ -572,34 +740,32 @@ def create_app() -> Flask:
 
     @app.get("/api/pet")
     def pet_progress_api():
-        client_id = client_identity(request.args)
+        identity = user_identity(require_user())
         with database.connect() as db:
             row = db.execute("SELECT * FROM pet_progress WHERE client_id=?",
-                             (client_id,)).fetchone()
-        return jsonify(pet_state(row, client_id))
+                             (identity,)).fetchone()
+        return jsonify(pet_state(row, identity))
 
     @app.delete("/api/pet/memories")
     def pet_memories_delete_api():
-        data = request.get_json(force=True, silent=True) or {}
-        client_id = client_identity(data)
+        identity = user_identity(require_user())
         with database.connect() as db:
             deleted = db.execute("DELETE FROM pet_memories WHERE client_id=?",
-                                 (client_id,)).rowcount
+                                 (identity,)).rowcount
         return jsonify({"deleted": deleted})
 
     @app.delete("/api/pet/memories/<int:memory_id>")
     def pet_memory_delete_api(memory_id: int):
-        data = request.get_json(force=True, silent=True) or {}
-        client_id = client_identity(data)
+        identity = user_identity(require_user())
         with database.connect() as db:
             deleted = db.execute(
                 "DELETE FROM pet_memories WHERE id=? AND client_id=?",
-                (memory_id, client_id)).rowcount
+                (memory_id, identity)).rowcount
         return jsonify({"deleted": deleted})
 
     @app.get("/api/conversations")
     def conversation_list():
-        client_id = client_identity(request.args)
+        identity = user_identity(require_user())
         with database.connect() as db:
             rows = db.execute(
                 "SELECT c.id,c.title,c.created_at,"
@@ -610,16 +776,16 @@ def create_app() -> Flask:
                 " FROM conversations c WHERE c.owner_id=?"
                 " AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)"
                 " ORDER BY updated_at DESC LIMIT 60",
-                (client_id,),
+                (identity,),
             ).fetchall()
         return jsonify({"conversations": [dict(row) for row in rows]})
 
     @app.get("/api/conversations/<conversation_id>")
     def conversation_detail(conversation_id):
-        client_id = client_identity(request.args)
+        identity = user_identity(require_user())
         with database.connect() as db:
             row = db.execute("SELECT id,title FROM conversations WHERE id=? AND owner_id=?",
-                             (conversation_id, client_id)).fetchone()
+                             (conversation_id, identity)).fetchone()
             if not row:
                 return jsonify({"conversation": None})
             messages = db.execute("SELECT * FROM messages WHERE conversation_id=?"
@@ -633,7 +799,7 @@ def create_app() -> Flask:
         question = text_value(data, "question", limit=MAX_QUESTION)
         conversation_id = text_value(data, "conversation_id", limit=128)
         request_id = request_identity(data)
-        client_id = client_identity(data)
+        identity = user_identity(require_user())
         remember_pet = data.get("remember") is True
         if not 2 <= len(question) <= MAX_QUESTION:
             abort(400, "问题长度需在 2-2000 字之间")
@@ -643,16 +809,16 @@ def create_app() -> Flask:
             if conversation_id:
                 found = db.execute("SELECT id,owner_id FROM conversations WHERE id=?",
                                    (conversation_id,)).fetchone()
-                if not found or found["owner_id"] not in ("", client_id):
+                if not found or found["owner_id"] not in ("", identity):
                     conversation_id = ""
                 elif not found["owner_id"]:
                     db.execute("UPDATE conversations SET owner_id=? WHERE id=?",
-                               (client_id, conversation_id))
+                               (identity, conversation_id))
             if not conversation_id:
                 conversation_id = new_id()
                 db.execute("INSERT INTO conversations (id,title,owner_id,created_at)"
                            " VALUES (?,?,?,?)",
-                           (conversation_id, question[:60], client_id, now_iso()))
+                           (conversation_id, question[:60], identity, now_iso()))
             old = db.execute("SELECT role,content FROM messages WHERE conversation_id=?"
                              " ORDER BY created_at DESC LIMIT 20", (conversation_id,)).fetchall()
         previous = [row["content"] for row in reversed(old) if row["role"] == "user"][-3:]
@@ -725,9 +891,9 @@ def create_app() -> Flask:
             pet = None
             if result["used"]:
                 reward_event_id = f"qa:{request_id}"
-                pet = pet_tick(client_id, "qa", reward_event_id)
+                pet = pet_tick(identity, "qa", reward_event_id)
                 if remember_pet and pet["gained"]:
-                    pet_remember(client_id, reward_event_id,
+                    pet_remember(identity, reward_event_id,
                                  question, result["content"])
             yield sse({"type": "result", "content": result["content"], "citations": citations,
                        "grounded": bool(result["used"]), "notice": notice,
@@ -739,18 +905,19 @@ def create_app() -> Flask:
     # 模拟法庭
     # ------------------------------------------------------------------
     def save_court_session(session_id: str, case_id: str, engine: TrialEngine,
-                           *, next_stage: str = "", checkpoint: dict | None = None):
+                           *, next_stage: str = "", checkpoint: dict | None = None,
+                           owner: str = ""):
         """庭审状态落库：transcript + 引擎状态（检查点续跑用）。"""
         state = engine.export_state()
         state["next_stage"] = next_stage
         state["checkpoint"] = checkpoint
         with database.connect() as db:
             db.execute(
-                "INSERT INTO court_sessions (id,case_id,transcript,state,created_at)"
-                " VALUES (?,?,?,?,?)"
+                "INSERT INTO court_sessions (id,case_id,owner_id,transcript,state,created_at)"
+                " VALUES (?,?,?,?,?,?)"
                 " ON CONFLICT(id) DO UPDATE SET transcript=excluded.transcript,"
                 " state=excluded.state",
-                (session_id, case_id,
+                (session_id, case_id, owner,
                  json.dumps(engine.transcript, ensure_ascii=False),
                  json.dumps(state, ensure_ascii=False), now_iso()))
 
@@ -789,6 +956,7 @@ def create_app() -> Flask:
         player_role = text_value(data, "role", limit=32) or "juror"
         if player_role not in PLAYER_ROLES:
             abort(400, "请选择有效的庭审角色")
+        identity = user_identity(require_user())
         session_id = new_id()
         engine = TrialEngine(case, court_llm, player_role=player_role)
 
@@ -800,24 +968,27 @@ def create_app() -> Flask:
                     # 检查点：暂停庭审，等待用户通过 /continue 提交预判或角色发言。
                     if event.get("type") == "checkpoint":
                         save_court_session(session_id, case_id, engine,
-                                           next_stage=event["next"], checkpoint=event)
+                                           next_stage=event["next"], checkpoint=event,
+                                           owner=identity)
                         yield sse(event)
                         return
                     yield sse(event)
             except LLMError as exc:
                 yield sse({"type": "error", "error": str(exc)})
                 return
-            save_court_session(session_id, case_id, engine, next_stage="await_deliberation")
+            save_court_session(session_id, case_id, engine,
+                               next_stage="await_deliberation", owner=identity)
 
         return Response(stream_with_context(stream()), mimetype="text/event-stream")
 
     @app.post("/api/court/sessions/<session_id>/continue")
     def court_continue(session_id):
         """用户在陪审员或诉讼角色检查点提交内容后，续跑庭审。"""
+        identity = user_identity(require_user())
         data = request.get_json(force=True, silent=True) or {}
         with database.connect() as db:
             row = db.execute("SELECT * FROM court_sessions WHERE id=?", (session_id,)).fetchone()
-        if not row:
+        if not row or row["owner_id"] != identity:
             abort(404, "庭审会话不存在")
         if row["deliberation"]:
             abort(409, "该会话已结束")
@@ -875,10 +1046,11 @@ def create_app() -> Flask:
 
     @app.post("/api/court/sessions/<session_id>/deliberation")
     def court_deliberation(session_id):
+        identity = user_identity(require_user())
         data = request.get_json(force=True, silent=True) or {}
         with database.connect() as db:
             row = db.execute("SELECT * FROM court_sessions WHERE id=?", (session_id,)).fetchone()
-        if not row:
+        if not row or row["owner_id"] != identity:
             abort(404, "庭审会话不存在或未完成")
         case = court_cases.CASES.get(row["case_id"])
         if not case:
@@ -902,7 +1074,6 @@ def create_app() -> Flask:
         deliberation = {"option_id": option_id, "label": option["label"],
                         "years": years, "convict": bool(option.get("convict")),
                         "marks": marks}
-        pet_client = text_value(data, "client_id", limit=128)
         engine = restore_engine(row)
 
         def stream():
@@ -920,9 +1091,7 @@ def create_app() -> Flask:
                            " WHERE id=?",
                            (json.dumps(deliberation, ensure_ascii=False), analysis,
                             now_iso(), session_id))
-            pet = None
-            if len(pet_client) >= 8 and re.fullmatch(r"[A-Za-z0-9._:-]+", pet_client):
-                pet = pet_tick(pet_client, "court", f"court:{session_id}")
+            pet = pet_tick(identity, "court", f"court:{session_id}")
             if pet:
                 yield sse({"type": "pet", "pet": pet})
 

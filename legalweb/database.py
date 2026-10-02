@@ -1,6 +1,8 @@
-"""SQLite 持久化：知识库分块(+FTS5)、问答会话、模拟法庭评议记录。
+"""SQLite 持久化：知识库分块(+FTS5)、账户与会话、问答会话、模拟法庭评议记录。
 
-单租户演示应用，无用户体系；所有写入都通过 Database.connect() 的事务上下文。
+用户体系：users/auth_sessions 表 + 不透明会话令牌 Cookie；业务数据按
+`u:<user_id>` 身份键隔离（复用既有 owner_id/client_id 列）。
+所有写入都通过 Database.connect() 的事务上下文。
 """
 
 import json
@@ -69,6 +71,20 @@ CREATE TABLE IF NOT EXISTS pet_reward_events (
 );
 CREATE INDEX IF NOT EXISTS pet_reward_events_client
     ON pet_reward_events(client_id, created_at);
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS auth_sessions_user ON auth_sessions(user_id);
 """
 
 
@@ -103,6 +119,11 @@ class Database:
             # 旧库迁移：court_sessions 增加 state 列（庭审检查点续跑状态）
             try:
                 db.execute("ALTER TABLE court_sessions ADD COLUMN state TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            # 旧库迁移：账户体系上线后庭审会话按登录用户隔离
+            try:
+                db.execute("ALTER TABLE court_sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''")
             except sqlite3.OperationalError:
                 pass  # 列已存在
             # 旧库迁移：匿名浏览器标识隔离各自的问答历史，避免公开站点串话。

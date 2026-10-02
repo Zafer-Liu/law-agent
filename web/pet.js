@@ -38,6 +38,10 @@
         <span class="pet-panel-status-text"></span>
         <button class="pet-retry-btn" type="button">重试</button>
       </div>
+      <div class="pet-login-note" hidden>
+        <p>登录后即可同步成长记录、咨询记忆与模拟法庭进度，数据只保存在你自己的账户里。</p>
+        <button class="pet-login-btn" type="button">登录 / 注册</button>
+      </div>
       <p class="pet-panel-title">初识人间，蹒跚学步</p>
       <p class="pet-stage-appearance">幼角初生，浅色鬃毛</p>
       <div class="pet-bar" role="progressbar" aria-label="当前成长阶段进度"
@@ -91,6 +95,7 @@
   const retryButton = root.querySelector(".pet-retry-btn");
   const patButton = root.querySelector(".pet-pat-btn");
   const resetButton = root.querySelector(".pet-reset-btn");
+  const loginNote = root.querySelector(".pet-login-note");
 
   // ---- 状态机（与渲染层解耦：3D 循环读取这些变量） ----
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -300,9 +305,18 @@
       const res = await fetch(`${API_BASE}/api/pet?client_id=${encodeURIComponent(id)}`, {
         signal: controller.signal,
       });
+      if (res.status === 401) {
+        // 未登录：宠物照常陪伴，面板只展示登录引导
+        panel.classList.add("logged-out");
+        loginNote.hidden = false;
+        setPanelStatus("", "");
+        return null;
+      }
       if (!res.ok) throw new Error(`pet ${res.status}`);
       const pet = await res.json();
       if (controller.signal.aborted) return null;
+      panel.classList.remove("logged-out");
+      loginNote.hidden = true;
       renderPet(pet);
       stageIndex = pet.stage_index;
       lastExp = pet.exp;
@@ -411,6 +425,33 @@
 
   // ---- 面板开关 ----
   let panelHideTimer = 0;
+
+  /* 面板是 fixed 定位：跟据宠物当前位置自动选「上方优先、放不下翻下方」，
+     并整体钳制在视口内——宠物拖到边缘也不会被聊天区裁剪或压到界面外。
+     完整卡片不滚动；仅视口高度实在放不下时才兜底出滚动条。 */
+  function placePanel() {
+    if (panel.hidden) return;
+    const MARGIN = 12;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    panel.style.maxHeight = "";      // 先还原自然高度再测量
+    panel.style.overflowY = "";
+    const br = badge.getBoundingClientRect();
+    const pw = panel.offsetWidth, ph = panel.offsetHeight;
+    const below = br.top < MARGIN + ph + 14;   // 上方放不下（留出 14px 间距）→ 放下方
+    let left = below ? br.left : br.right - pw;
+    let top = below ? br.bottom + 14 : br.top - ph - 14;
+    left = Math.max(MARGIN, Math.min(left, vw - pw - MARGIN));
+    top = Math.max(MARGIN, Math.min(top, vh - ph - MARGIN));
+    if (ph > vh - 2 * MARGIN) {                // 极矮视口：整体放不下才允许内部滚动
+      panel.style.maxHeight = `${vh - 2 * MARGIN}px`;
+      panel.style.overflowY = "auto";
+      top = MARGIN;
+    }
+    panel.style.left = `${Math.round(left)}px`;
+    panel.style.top = `${Math.round(top)}px`;
+    panel.style.transformOrigin = below ? "top right" : "bottom right";
+  }
+
   function closePanel(restoreFocus = false) {
     if (badge.getAttribute("aria-expanded") !== "true") return;
     clearTimeout(panelHideTimer);
@@ -428,6 +469,7 @@
     markOnboardingSeen();
     hideBubble();
     panel.hidden = false;
+    placePanel();
     badge.setAttribute("aria-expanded", "true");
     requestAnimationFrame(() => {
       if (badge.getAttribute("aria-expanded") === "true") panel.classList.add("show");
@@ -446,6 +488,8 @@
   panelClose.addEventListener("click", () => closePanel(true));
   patButton.addEventListener("click", patPet);
   retryButton.addEventListener("click", () => fetchPet({ showLoading: true }));
+  // 内容增减（成长记录/记忆刷新）会改变面板高度，跟着重新定位
+  if ("ResizeObserver" in window) new ResizeObserver(placePanel).observe(panel);
   document.addEventListener("click", (e) => {
     if (!root.contains(e.target)) closePanel(false);
   });
@@ -468,6 +512,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ client_id: id }),
       });
+      if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:request-login"));
+        throw new Error("unauthorized");
+      }
       if (!res.ok) throw new Error("delete failed");
       const result = await res.json();
       await fetchPet();
@@ -501,6 +549,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ client_id: id }),
       });
+      if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:request-login"));
+        throw new Error("unauthorized");
+      }
       if (!res.ok) throw new Error("delete failed");
       const result = await res.json();
       await fetchPet();
@@ -515,6 +567,12 @@
   }
   memoryClear.addEventListener("click", clearMemories);
   window.addEventListener("pet:clear-memories", clearMemories);
+
+  // ---- 账户联动：未登录时面板引导登录；登录/切换账户后重拉成长数据 ----
+  loginNote.querySelector(".pet-login-btn").addEventListener("click", () => {
+    window.dispatchEvent(new CustomEvent("auth:request-login"));
+  });
+  window.addEventListener("auth:changed", () => { fetchPet(); });
 
   // ---- 聊天联动事件（app.js / court.js 派发） ----
   window.addEventListener("pet:ask", () => {
@@ -575,17 +633,24 @@
     growthFeedback(pet, previousStage, gain, "庭审完成");
   });
 
-  // ---- 位置：默认跟随 composer-dock；可拖拽移动，位置记忆在 localStorage ----
+  // ---- 位置：fixed 定位（视口坐标系），可拖到屏幕任意位置停留；默认跟随 composer-dock ----
   const dock = chatArea.querySelector(".composer-dock");
   let dragMoved = false;   // 拖拽/恢复过位置后，不再自动跟随 dock 高度
   function clampRoot() {
-    const p = root.offsetParent;
-    if (!p) return;
-    root.style.left = `${Math.max(0, Math.min(root.offsetLeft, p.offsetWidth - root.offsetWidth))}px`;
-    root.style.top = `${Math.max(0, Math.min(root.offsetTop, p.offsetHeight - root.offsetHeight))}px`;
+    const r = root.getBoundingClientRect();
+    root.style.left = `${Math.max(0, Math.min(r.left, window.innerWidth - root.offsetWidth))}px`;
+    root.style.top = `${Math.max(0, Math.min(r.top, window.innerHeight - root.offsetHeight))}px`;
+  }
+  function dockBottom() {
+    if (!dock) return 150;
+    const dr = dock.getBoundingClientRect();
+    return Math.max(12, window.innerHeight - dr.bottom + 12);
   }
   if (dock && "ResizeObserver" in window) {
-    const place = () => { if (!dragMoved) root.style.bottom = `${dock.offsetHeight + 12}px`; };
+    const place = () => {
+      if (!dragMoved) root.style.bottom = `${dockBottom()}px`;
+      placePanel();
+    };
     new ResizeObserver(place).observe(dock);
     place();
   }
@@ -595,8 +660,9 @@
     root.style.removeProperty("left");
     root.style.removeProperty("top");
     root.style.removeProperty("right");
-    root.style.bottom = `${dock ? dock.offsetHeight + 12 : 150}px`;
+    root.style.bottom = `${dockBottom()}px`;
     resetButton.hidden = true;
+    placePanel();
     try { localStorage.removeItem(POSITION_KEY); } catch { /* 仅影响持久化 */ }
     setState("happy");
     say("我回到原来的位置啦", 2400);
@@ -615,7 +681,11 @@
       clampRoot();
     }
   } catch { /* 位置记忆损坏则回到默认位置 */ }
-  window.addEventListener("resize", () => { if (dragMoved) clampRoot(); });
+  window.addEventListener("resize", () => {
+    if (dragMoved) clampRoot();
+    else root.style.bottom = `${dockBottom()}px`;
+    placePanel();
+  });
 
   // 拖拽：Pointer Events 统一鼠标/触摸；位移 <5px 视为点击（开面板）
   let suppressClick = false;
@@ -627,7 +697,8 @@
       dragging = false;
       suppressClick = false;
       pressX = e.clientX; pressY = e.clientY;
-      baseL = root.offsetLeft; baseT = root.offsetTop;
+      const r = root.getBoundingClientRect();   // fixed 定位：rect 即视口坐标
+      baseL = r.left; baseT = r.top;
       try { badge.setPointerCapture(e.pointerId); } catch { /* 无捕获则仅在徽章内可拖 */ }
     });
     badge.addEventListener("pointermove", (e) => {
@@ -643,6 +714,7 @@
       root.style.left = `${baseL + dx}px`;
       root.style.top = `${baseT + dy}px`;
       clampRoot();
+      placePanel();   // 面板开着拖动时跟着宠物走
       lastActivity = Date.now();
       if (state === "sleepy") setState("idle");
     });

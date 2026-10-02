@@ -21,6 +21,7 @@
       <button id="tab-button-court" class="tab" data-tab="court" role="tab"
         aria-selected="false" aria-controls="tab-court">模拟法庭</button>
     </nav>
+    <div id="auth-area" class="auth-area"></div>
     <button id="settings-button" class="settings-button" type="button"
       aria-label="打开设置面板" aria-expanded="false" aria-controls="settings-drawer">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -328,25 +329,58 @@
     </header>
     <div class="settings-body">
       <section class="settings-section" aria-label="检索增强开关">
-        <h3>检索增强</h3>
-        <p class="settings-hint">关闭立即生效（下次提问起），不影响服务器配置。</p>
-        <div id="settings-features" class="settings-features"></div>
+        <h3><button class="settings-fold-btn" type="button" aria-expanded="false" aria-controls="settings-features">检索增强</button></h3>
+        <div id="settings-features" class="settings-features" hidden></div>
       </section>
       <section class="settings-section" aria-label="桌面宠物">
-        <h3>桌面宠物</h3>
-        <p class="settings-hint">显示偏好仅保存在本浏览器；咨询记忆默认关闭，开启后才会保存问答摘要。</p>
-        <div id="settings-pet" class="settings-features"></div>
+        <h3><button class="settings-fold-btn" type="button" aria-expanded="false" aria-controls="settings-pet">桌面宠物</button></h3>
+        <div id="settings-pet" class="settings-features" hidden></div>
       </section>
       <section class="settings-section" aria-label="运行日志">
-        <h3>运行日志
+        <h3>
+          <button class="settings-fold-btn" type="button" aria-expanded="false" aria-controls="settings-log">运行日志</button>
           <button id="logs-refresh" class="logs-refresh" type="button">刷新</button>
         </h3>
-        <p class="settings-hint">最近 200 条应用日志（内存暂存，服务重启后清空）。</p>
-        <div id="settings-log" class="settings-log" aria-live="polite"></div>
+        <div id="settings-log" class="settings-log" aria-live="polite" hidden></div>
       </section>
     </div>
   </aside>
   <button id="settings-backdrop" class="settings-backdrop" type="button" aria-label="关闭设置面板" hidden></button>
+
+  <!-- ==================== 登录 / 注册 弹窗 ==================== -->
+  <div id="auth-backdrop" class="auth-backdrop" hidden></div>
+  <div id="auth-modal" class="auth-modal" role="dialog" aria-modal="true"
+    aria-labelledby="auth-title" hidden>
+    <header class="auth-head">
+      <h2 id="auth-title">登录法晓</h2>
+      <button id="auth-close" class="close-btn" type="button" aria-label="关闭登录窗口">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
+      </button>
+    </header>
+    <div class="auth-body">
+      <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+        <button id="auth-tab-login" class="auth-tab active" type="button" role="tab"
+          aria-selected="true">登录</button>
+        <button id="auth-tab-register" class="auth-tab" type="button" role="tab"
+          aria-selected="false">注册</button>
+      </div>
+      <form id="auth-form" novalidate>
+        <label class="auth-field">
+          <span>用户名</span>
+          <input id="auth-username" name="username" autocomplete="username"
+            maxlength="24" required>
+        </label>
+        <label class="auth-field">
+          <span>密码</span>
+          <input id="auth-password" name="password" type="password"
+            autocomplete="current-password" maxlength="128" required>
+        </label>
+        <p id="auth-hint" class="auth-hint" hidden></p>
+        <button type="submit" class="primary-btn auth-submit" id="auth-submit">登录</button>
+      </form>
+      <p class="auth-note">注册后，问答记录、模拟法庭进度与獬豸成长都会保存到你自己的账户里。</p>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
 
