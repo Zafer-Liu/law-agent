@@ -631,10 +631,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .primary-btn:hover:not(:disabled) { background: var(--primary-dark); box-shadow: 0 4px 14px rgba(200,40,30,.28); }
 
 /* 判决对照 */
-.verdict { max-width: 820px; margin: 0 auto; padding: 28px; }
+.verdict { max-width: 1100px; margin: 0 auto; padding: 28px; }
 .verdict h2 { text-align: center; margin-bottom: 28px; }
 
-.verdict-cards { display: flex; gap: 18px; margin-bottom: 28px; }
+.verdict-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 28px; }
 .verdict-card { flex: 1; padding: 22px; border-radius: var(--radius); border: 1.5px solid var(--border); }
 .verdict-card h3 { font-size: 14px; margin-bottom: 10px; }
 .verdict-card p { font-size: 14px; line-height: 1.8; }
