@@ -10,7 +10,7 @@ from unittest.mock import patch
 from werkzeug.exceptions import BadRequest
 
 from legalweb.app import create_app, text_value
-from legalweb.courtroom.agents import ROLES
+from legalweb.courtroom.agents import build_roles
 from legalweb.courtroom.cases import CASES
 from legalweb.courtroom.engine import PLAYER_ROLES, TrialEngine
 from legalweb.database import Database, new_id, now_iso
@@ -161,10 +161,13 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(ending["player_role"], "audience")
 
     def test_court_roles_use_distinct_language_registers(self):
-        self.assertIn("规范、严谨、克制的公诉语言", ROLES["prosecutor"]["system"])
-        self.assertIn("专业、准确、有针对性的辩护语言", ROLES["defender"]["system"])
-        self.assertIn("日常短句", ROLES["defendant"]["system"])
-        self.assertIn("规范、克制的裁判语言", ROLES["judge_review"]["system"])
+        for case in CASES.values():
+            roles = build_roles(case)
+            self.assertIn("规范、严谨、克制的公诉语言", roles["prosecutor"]["system"])
+            self.assertIn("专业、准确、有针对性的辩护语言", roles["defender"]["system"])
+            self.assertIn("日常短句", roles["defendant"]["system"])
+        roles = build_roles(CASES["haicheng"])
+        self.assertIn("规范、克制的裁判语言", roles["judge_review"]["system"])
 
     def test_role_checkpoint_offers_two_presets_and_custom_can_be_supplied(self):
         for role in ("prosecutor", "defender", "defendant"):

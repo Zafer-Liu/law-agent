@@ -86,6 +86,81 @@
     })
     .catch(() => { caseCardsEl.innerHTML = "<p class='muted'>加载案例失败</p>"; });
 
+  // ---- 复盘记录：已完成的庭审 ----
+  const reviewsEl = document.getElementById("court-reviews");
+  const reviewListEl = document.getElementById("review-list");
+
+  function loadReviews() {
+    fetch("/api/court/sessions")
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((data) => {
+        const sessions = data.sessions || [];
+        reviewsEl.hidden = sessions.length === 0;
+        reviewListEl.innerHTML = "";
+        sessions.forEach((s) => {
+          const card = document.createElement("div");
+          card.className = "review-card";
+          const finished = (s.finished_at || "").replace("T", " ").slice(0, 16);
+          card.innerHTML = `
+            <div class="review-info">
+              <div class="review-title">${escapeHtml(s.title)} <small>${escapeHtml(s.subtitle)}</small></div>
+              <div class="review-meta">${escapeHtml(s.theme)} · 完成于 ${escapeHtml(finished)} · 你的评议：${escapeHtml(s.your_label)}</div>
+            </div>
+            <button type="button" class="outline-btn review-open">查看复盘</button>
+          `;
+          card.querySelector(".review-open").addEventListener("click", () => openReview(s.session_id));
+          reviewListEl.appendChild(card);
+        });
+      })
+      .catch(() => { reviewsEl.hidden = true; });
+  }
+  // 登录/退出后复盘列表会变化（页面加载时可能尚未登录）
+  window.addEventListener("auth:changed", () => loadReviews());
+  loadReviews();
+
+  async function openReview(sessionId) {
+    try {
+      const res = await fetch(`/api/court/sessions/${sessionId}/review`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || "复盘加载失败");
+        if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
+        return;
+      }
+      const data = await res.json();
+      caseData = Object.assign({ real_verdict: data.real_verdict }, data.case);
+      currentCaseId = data.case.id;
+
+      selectEl.hidden = true;
+      roleSelectEl.hidden = true;
+      trialEl.hidden = true;
+      deliberationEl.hidden = true;
+      verdictEl.hidden = false;
+      resetTrialState();
+
+      const deliberation = data.deliberation || {};
+      const markedText = (data.marks || []).length
+        ? `（关键证据：${data.marks.map((eid) => evidenceName(eid)).join("、")}）` : "";
+      document.getElementById("verdict-yours").textContent =
+        (deliberation.label || "") +
+        (deliberation.convict ? `，量刑建议：${deliberation.years} 年有期徒刑` : "") + markedText;
+      document.getElementById("verdict-real").textContent = data.real_verdict.summary;
+      document.getElementById("verdict-reasoning").textContent = data.real_verdict.reasoning;
+      document.getElementById("verdict-articles").textContent = (data.real_verdict.articles || []).join("；");
+      document.getElementById("analysis-content").textContent = displayEvidenceNames(data.analysis || "");
+      renderVerdictTrajectory({
+        trajectory: data.trajectory || [],
+        contributions: data.contributions || [],
+        yours: { label: deliberation.label || "" },
+        real: { summary: data.real_verdict.summary },
+      });
+      document.getElementById("court-restart").textContent = "返回案件列表";
+      verdictEl.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch {
+      toast("网络错误");
+    }
+  }
+
   // ---- 加载案例详情并选择角色 ----
   async function loadCase(caseId) {
     try {
@@ -102,6 +177,16 @@
       deliberationEl.hidden = true;
       verdictEl.hidden = true;
       document.getElementById("role-case-title").textContent = caseData.title + " · " + caseData.subtitle;
+      const videoBlock = document.getElementById("case-video-block");
+      const videoEl = document.getElementById("case-video");
+      if (caseData.has_video) {
+        videoEl.src = `/api/court/cases/${caseId}/video`;
+        videoBlock.hidden = false;
+      } else {
+        videoEl.removeAttribute("src");
+        videoEl.load();
+        videoBlock.hidden = true;
+      }
       roleSelectEl.querySelectorAll(".role-option").forEach((button) => {
         button.classList.remove("selected");
         button.setAttribute("aria-pressed", "false");
@@ -155,6 +240,7 @@
 
   roleStart.addEventListener("click", () => {
     if (!selectedRole) return;
+    document.getElementById("case-video").pause();
     roleSelectEl.hidden = true;
     trialEl.hidden = false;
     courtTitle.textContent = caseData.title + " · " + caseData.subtitle;
@@ -863,6 +949,11 @@
   });
 
   function returnToCases() {
+    const videoEl = document.getElementById("case-video");
+    videoEl.pause();
+    videoEl.removeAttribute("src");
+    videoEl.load();
+    document.getElementById("case-video-block").hidden = true;
     verdictEl.hidden = true;
     deliberationEl.hidden = true;
     trialEl.hidden = true;
@@ -872,6 +963,8 @@
     selectedRole = "";
     currentCaseId = "";
     caseData = null;
+    document.getElementById("court-restart").textContent = "再来一局";
+    loadReviews();
     selectEl.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 

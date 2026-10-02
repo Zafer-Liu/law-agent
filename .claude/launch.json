@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["preview_server.py", "8123"],
       "port": 8123
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "legalweb"],
+      "port": 8124
     }
   ]
 }

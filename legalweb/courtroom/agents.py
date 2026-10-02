@@ -2,6 +2,8 @@
 
 封闭卷宗接地是防幻觉的工程核心：所有角色的发言只能建立在编号证据
 （E1、E2…）与庭审已有记录之上，法条只允许引用卷宗预置的核对文本。
+控辩双方的人设由各案件 JSON 的 trial.roles 提供，本模块只保留与案件
+无关的通用角色（书记员、复盘审判长）。
 """
 
 DOSSIER_RULE = """【硬性纪律】
@@ -11,41 +13,7 @@ DOSSIER_RULE = """【硬性纪律】
 - 法官、公诉人、辩护人可以准确使用必要的法律术语；被告人使用日常语言。除非法庭明确要求，不背诵法条原文。
 - 不使用 markdown 标记、标题或列表，只说一个自然段。"""
 
-ROLES = {
-    "prosecutor": {
-        "key": "prosecutor", "name": "公诉人", "badge": "诉",
-        "temperature": 0.3,
-        "system": (
-            "你是海城市人民检察院的公诉人，出庭支持公诉，指控被告人陈明犯故意伤害罪。\n"
-            "语言风格：使用规范、严谨、克制的公诉语言。按照“证据事实—证明目的—法律评价”的顺序表达，"
-            "可以使用“不法侵害已经结束”“防卫时间条件”“现有证据能够证明”等必要术语，但不要写成法律论文。\n"
-            "你的核心主张：刘海跑向轿车时本案的不法侵害"
-            "已经结束，陈明的追刺超出了防卫时间条件，属于事后故意伤害；夺刀后的连续捅刺亦超出必要限度。\n"
-            "同时你是国家公诉人，负有客观义务：证据说不到的地方不硬说，不贬损死者也不侮辱被告人。\n"
-            "表达：每次发言不超过110字，使用2至4个短句。\n" + DOSSIER_RULE),
-    },
-    "defender": {
-        "key": "defender", "name": "辩护人", "badge": "辩",
-        "temperature": 0.45,
-        "system": (
-            "你是被告人陈明的辩护律师，为陈明作无罪辩护，主张其行为构成正当防卫（特殊防卫）。\n"
-            "你的核心主张：刘海持砍刀连续挥砍属于“行凶”；刀落地后的争夺与追刺发生在约11秒的持续"
-            "对抗中，刘海跑向轿车不排除取凶器、驾车继续侵害，不法侵害在整体上并未结束；"
-            "不能苛求防卫人在电光火石之间精准取舍。\n"
-            "语言风格：使用专业、准确、有针对性的辩护语言。围绕争议焦点进行证据分析和法律评价，"
-            "可以使用“特殊防卫”“防卫时间条件”“存疑时作有利于被告人的评价”等必要术语；"
-            "直接回应公诉意见，不写论文、不煽情。\n"
-            "表达：每次发言不超过110字，使用2至4个短句。\n" + DOSSIER_RULE),
-    },
-    "defendant": {
-        "key": "defendant", "name": "被告人", "badge": "被",
-        "temperature": 0.6,
-        "system": (
-            "你在庭审中是被告人陈明（34岁，外卖骑手，初犯，认罪态度好但坚称自己是被迫还手）。\n"
-            "风格：第一人称，像普通人回答法官问题。语气朴实、紧张但配合法庭，多用日常短句，不说律师式术语。\n"
-            "只能陈述卷宗（尤其是讯问笔录E1）中你陈述过的事实与当时的主观感受，不添加新事实。\n"
-            "表达：每次发言不超过65字。\n" + DOSSIER_RULE),
-    },
+GENERIC_ROLES = {
     "clerk": {
         "key": "clerk", "name": "书记员", "badge": "书",
         "temperature": 0.2,
@@ -66,6 +34,27 @@ ROLES = {
             "不使用 markdown 标记，用自然段落。"),
     },
 }
+
+# 控辩双方角色框架；system 提示词由案件 JSON 提供
+COURT_ROLE_META = {
+    "prosecutor": {"name": "公诉人", "badge": "诉", "temperature": 0.3},
+    "defender": {"name": "辩护人", "badge": "辩", "temperature": 0.45},
+    "defendant": {"name": "被告人", "badge": "被", "temperature": 0.6},
+}
+
+
+def build_roles(case: dict) -> dict:
+    """按案件装配庭审角色：控辩双方的人设来自 case['trial']['roles']。"""
+    trial_roles = case["trial"]["roles"]
+    roles = dict(GENERIC_ROLES)
+    for key, meta in COURT_ROLE_META.items():
+        system = (trial_roles.get(key) or "").strip()
+        if not system:
+            raise RuntimeError(f"模拟法庭案例缺少角色人设：{case['id']} · trial.roles.{key}")
+        roles[key] = {"key": key, "name": meta["name"], "badge": meta["badge"],
+                      "temperature": meta["temperature"], "system": system}
+    return roles
+
 
 # 审判长的程序性台词是纯代码模板，不经模型生成——程序正义部分由状态机保证。
 JUDGE_BADGE = "审"

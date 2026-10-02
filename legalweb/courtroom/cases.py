@@ -4,12 +4,14 @@ import json
 import re
 from pathlib import Path
 
+from .agents import build_roles
+
 CASE_DIR = Path(__file__).resolve().parents[2] / "assset" / "moot-court"
 CASE_ID_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 REQUIRED_FIELDS = frozenset({
     "id", "title", "subtitle", "theme", "duration", "entry_note",
     "learning_goal", "disclaimer", "parties", "charge", "disputes",
-    "facts", "dossier", "key_evidence", "laws", "real_verdict", "options",
+    "facts", "dossier", "key_evidence", "laws", "real_verdict", "options", "trial",
 })
 
 
@@ -30,6 +32,10 @@ def load_cases() -> dict[str, dict]:
         if missing:
             names = ", ".join(sorted(missing))
             raise RuntimeError(f"模拟法庭案例缺少字段：{path.name} · {names}")
+        try:
+            build_roles(case)
+        except RuntimeError as exc:
+            raise RuntimeError(f"模拟法庭案例 trial 块无效：{path.name} · {exc}") from exc
         if case_id in cases:
             raise RuntimeError(f"模拟法庭案例 ID 重复：{case_id}")
         cases[case_id] = case
@@ -39,6 +45,12 @@ def load_cases() -> dict[str, dict]:
 
 
 CASES = load_cases()
+
+
+def video_path(case: dict) -> Path | None:
+    """案件介绍视频路径（assset/moot-court/<case_id>.mp4，可选存在）。"""
+    path = CASE_DIR / f"{case['id']}.mp4"
+    return path if path.is_file() else None
 
 
 def public_case(case: dict, with_dossier: bool = True) -> dict:

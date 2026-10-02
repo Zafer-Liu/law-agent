@@ -5,13 +5,16 @@
 由各 Agent 生成。庭审在「法庭调查后」「法庭辩论后」两次暂停（checkpoint），
 等待用户提交陪审员预判或所选诉讼角色发言，再由 /continue 接口续跑——
 参与感由状态机的检查点保证，而不是提示词措辞。
+
+所有随案件变化的内容（角色人设、法官台词、检查点文案、角色发言选项）都
+存放在案件 JSON 的 trial 块中，引擎本身不绑定任何具体案件。
 """
 
 import re
 import time
 
 from ..llm import LLMError
-from .agents import JUDGE_BADGE, ROLES
+from .agents import JUDGE_BADGE, build_roles
 
 # 庭审推进的阶段顺序；mid_review / poll2 是等待陪审员输入的检查点
 STAGE_ORDER = ["opening", "investigation", "mid_review", "debate", "poll2",
@@ -25,84 +28,6 @@ PLAYER_ROLES = {
     "defendant": {"name": "被告人", "badge": "被"},
 }
 
-ROLE_CHECKPOINTS = {
-    "prosecutor": {
-        "investigation": ("补充举证意见", "选择一项关键证据，说明其证明内容和证明目的。",
-                          "例如：现有监控视频能够证明，刘海转身后，陈明仍继续追击……"),
-        "debate": ("发表最终公诉意见", "围绕争议焦点回应辩方观点，并作出明确法律评价。",
-                   "请使用简明、规范的公诉语言发表意见……"),
-    },
-    "defender": {
-        "investigation": ("提交质证意见", "指出一项关键证据的证明局限，并说明其对案件认定的影响。",
-                          "例如：监控视频显示，从夺刀到冲突结束仅约 11 秒……"),
-        "debate": ("发表最终辩护意见", "围绕争议焦点回应公诉意见，并提出明确辩护结论。",
-                   "请使用简明、专业的辩护语言发表意见……"),
-    },
-    "defendant": {
-        "investigation": ("补充事实陈述", "用自己的话说说，当时你看到了什么、害怕什么。",
-                          "只说卷宗里已经记录的事情……"),
-        "debate": ("作最后陈述", "说说你的心情，以及你想对法庭说的话。",
-                   "请像普通人一样说几句真话，不要使用法律术语……"),
-    },
-}
-
-ROLE_STATEMENT_OPTIONS = {
-    "prosecutor": {
-        "investigation": [
-            {"id": "timeline", "label": "突出追刺时间线",
-             "detail": "结合监控与尸检，说明追刺发生在被害人转身之后。",
-             "statement": "监控视频（E4）显示，刘海转身跑向轿车后，陈明仍继续追击；尸检意见（E5）证实背部存在两处创口。上述证据相互印证，能够证明后续行为已超出防卫时间条件。"},
-            {"id": "excess", "label": "强调反击超过限度",
-             "detail": "从伤口数量和连续攻击说明行为强度。",
-             "statement": "尸检意见（E5）显示，被害人共有七处刀伤，其中两处位于背部。公诉机关认为，即使前段行为具有防卫性质，后续连续追击也已明显超过制止侵害的必要限度。"},
-        ],
-        "debate": [
-            {"id": "ending", "label": "主张侵害已经结束",
-             "detail": "抓住转身离开与背部创伤，回应正当防卫观点。",
-             "statement": "辩方强调过程仅有十一秒，但持续时间短不能当然证明侵害仍在继续。监控视频（E4）与尸检意见（E5）能够证明刘海转身后仍遭追击，后续行为不具备防卫的时间条件。"},
-            {"id": "objective", "label": "客观评价全部行为",
-             "detail": "承认先前侵害，同时区分夺刀反击与后续追刺。",
-             "statement": "公诉机关认可刘海先持刀攻击，陈明最初的反击具有防卫起因。但监控视频（E4）和尸检意见（E5）同时证明此后发生追击，前后两段行为应依法分别评价。"},
-        ],
-    },
-    "defender": {
-        "investigation": [
-            {"id": "continuous", "label": "强调冲突连续性",
-             "detail": "以十一秒时间线说明危险没有清晰中断。",
-             "statement": "监控视频（E4）显示，从刀落地到冲突结束仅约十一秒，整个过程高度连续。现有证据不足以证明不法侵害已明确、现实地终止，对此应作有利于被告人的评价。"},
-            {"id": "danger", "label": "突出严重暴力危险",
-             "detail": "结合持刀攻击和被告伤情说明现实紧迫性。",
-             "statement": "证人证言（E2）与监控视频（E4）均证实刘海先持刀连续攻击，伤情鉴定（E6）亦印证陈明已经受伤。该行为属于针对正在进行的严重暴力侵害实施的防卫。"},
-        ],
-        "debate": [
-            {"id": "special_defense", "label": "主张构成特殊防卫",
-             "detail": "围绕“行凶”和持续危险作最终无罪辩护。",
-             "statement": "刘海持砍刀连续攻击，属于严重危及人身安全的暴力侵害。监控视频（E4）显示夺刀与反击发生在连续十一秒内，侵害是否终止并不明确，陈明的行为依法构成特殊防卫。"},
-            {"id": "reasonable_person", "label": "强调不能事后苛求",
-             "detail": "从防卫人的现场认知回应公诉意见。",
-             "statement": "判断防卫是否适时，应立足行为人当时所处情境，不能以事后视角苛求。讯问笔录（E1）与监控视频（E4）表明，陈明有合理理由认为现实危险尚未解除。"},
-        ],
-    },
-    "defendant": {
-        "investigation": [
-            {"id": "fear", "label": "说明当时的恐惧",
-             "detail": "依据讯问笔录陈述为何认为危险仍未解除。",
-             "statement": "他拿刀一直砍我，我的手和肩都受了伤。抢到刀以后，我看见他往车边跑，怕他还要拿东西。事情发生得太快，我当时只想保住自己。"},
-            {"id": "cooperate", "label": "说明事后没有逃离",
-             "detail": "依据卷宗说明停止行为并等待警察。",
-             "statement": "他倒下以后我就停手了，也没有逃跑，一直在现场等警察。我不是想伤害他，只是当时被刀追着砍，真的很害怕。"},
-        ],
-        "debate": [
-            {"id": "final_remorse", "label": "表达遗憾并请求公正裁判",
-             "detail": "承认死亡后果，同时坚持自己是在自保。",
-             "statement": "刘海去世，我心里很难受。但当时是他先拿刀砍我，我真的以为自己会死。我希望法庭看看当时的情况，公正作出判断。"},
-            {"id": "final_facts", "label": "坚持依据事实说明自保",
-             "detail": "简洁重申持刀侵害、连续过程和留在现场。",
-             "statement": "我没有先动手，是他拿刀砍我以后我才还手。整个过程只有十来秒，他倒下后我马上停手，也留在现场等警察。请法庭公正判断。"},
-        ],
-    },
-}
-
 
 def judge_line(text: str) -> dict:
     return {"type": "line", "role": "judge", "name": "审判长", "badge": JUDGE_BADGE, "text": text}
@@ -111,6 +36,8 @@ def judge_line(text: str) -> dict:
 class TrialEngine:
     def __init__(self, case: dict, llm, player_role: str = "juror"):
         self.case = case
+        self.trial = case["trial"]
+        self.roles = build_roles(case)
         self.llm = llm
         self.player_role = player_role if player_role in PLAYER_ROLES else "juror"
         self.transcript = []      # [{"role","name","text"}]
@@ -157,8 +84,9 @@ class TrialEngine:
         return "\n".join(lines)
 
     def agent_messages(self, role_key: str, task: str, with_laws: bool = False) -> list[dict]:
-        role = ROLES[role_key]
+        role = self.roles[role_key]
         parts = [f"【案情摘要（起诉指控）】\n{self.case['facts']}",
+                 f"【争议焦点】\n" + "\n".join(f"{i}. {d}" for i, d in enumerate(self.case["disputes"], 1)),
                  f"【卷宗】\n{self.dossier_text()}"]
         if with_laws:
             parts.append(f"【相关法条（仅可引用这些原文）】\n{self.laws_text()}")
@@ -175,7 +103,7 @@ class TrialEngine:
 
         使用非流式调用（更稳定，推理模型的 think 标签长度不可控），
         然后逐段模拟流式输出，保留打字机效果。失败时间隔重试，最多三次。"""
-        role = ROLES[role_key]
+        role = self.roles[role_key]
         messages = self.agent_messages(role_key, task, with_laws)
         yield {"type": "turn_start", "role": role_key, "name": role["name"], "badge": role["badge"]}
         text = ""
@@ -206,7 +134,7 @@ class TrialEngine:
         if not fresh:
             return None
         content = "\n".join(f"{item['name']}：{item['text']}" for item in fresh)
-        role = ROLES["clerk"]
+        role = self.roles["clerk"]
         messages = [{"role": "system", "content": role["system"]},
                     {"role": "user", "content": f"【需要纪要的庭审内容】\n{content}"}]
         try:
@@ -224,12 +152,11 @@ class TrialEngine:
     # ------------------------------------------------------------------
     def stage_opening(self):
         yield {"type": "phase", "phase": "opening", "title": "开庭"}
-        yield judge_line("现在开庭。海城市人民法院刑事审判庭，今天依法公开开庭审理海城市人民检察院"
-                         "提起公诉的被告人陈明涉嫌故意伤害罪一案。传被告人陈明到庭。")
-        yield judge_line("被告人陈明，起诉书指控你犯故意伤害罪，你对起诉书指控的犯罪事实有无异议？")
+        yield judge_line(self.trial["lines"]["opening"])
+        yield judge_line(self.trial["lines"]["ask_defendant"])
         yield from self.turn("defendant",
                              "审判长问你对起诉书指控的犯罪事实有无异议。请当庭回答，"
-                             "并按讯问笔录（E1）里你说过的话简短说明理由，不超过60字。")
+                             "并按卷宗中你向侦查机关所作的供述或陈述简短说明理由，不超过60字。")
 
     def stage_investigation(self):
         case = self.case
@@ -240,7 +167,7 @@ class TrialEngine:
                              "不要照念起诉书。")
         yield judge_line("被告人，你现在就起诉书指控的事实向法庭陈述。")
         yield from self.turn("defendant",
-                             "用普通人的话说清事情经过，与讯问笔录（E1）一致，不超过65字。")
+                             "用普通人的话说清事情经过，与卷宗中你的陈述一致，不超过65字。")
         yield judge_line("下面进行举证质证。请公诉人集中说明关键证据，辩护人随后回应。")
         evidence_names = "、".join(
             f"{item['type']}（{item['id']}）"
@@ -257,15 +184,16 @@ class TrialEngine:
             yield note
 
     def stage_debate(self):
+        hints = self.trial["debate_hints"]
         yield {"type": "phase", "phase": "debate", "title": "法庭辩论"}
         yield judge_line("法庭调查结束，现在进行法庭辩论。先由公诉人发表公诉意见。")
         yield from self.turn("prosecutor",
-                             "使用规范的公诉语言发表意见：说明为什么追刺已经不是制止危险。"
+                             f"使用规范的公诉语言发表意见：{hints['prosecutor']}。"
                              "围绕一个核心理由作出法律评价，不背诵法条，不超过110字。",
                              with_laws=True)
         yield from self.turn("defender",
-                             "使用专业的辩护语言回应公诉意见：说明为什么当时的危险尚未结束。"
-                             "围绕一个核心理由提出无罪主张，不背诵法条，不超过110字。",
+                             f"使用专业的辩护语言回应公诉意见：{hints['defender']}。"
+                             "围绕一个核心理由提出辩护主张，不背诵法条，不超过110字。",
                              with_laws=True)
         yield from self.turn("prosecutor",
                              "只回应辩护人刚才最关键的一句话，不重复前文，不超过60字。", with_laws=True)
@@ -278,7 +206,7 @@ class TrialEngine:
 
     def stage_statement(self):
         yield {"type": "phase", "phase": "statement", "title": "最后陈述"}
-        yield judge_line("法庭辩论结束。被告人陈明，你可以作最后陈述。")
+        yield judge_line(self.trial["lines"]["statement_invite"])
         if self.player_role == "defendant":
             yield judge_line("被告人刚才提交的最后陈述已记录在案。")
             return
@@ -346,8 +274,8 @@ class TrialEngine:
 
     def _role_checkpoint(self, stage: str, next_stage: str):
         role = PLAYER_ROLES[self.player_role]
-        title, prompt, placeholder = ROLE_CHECKPOINTS[self.player_role][stage]
-        options = ROLE_STATEMENT_OPTIONS[self.player_role][stage]
+        title, prompt, placeholder = self.trial["checkpoints"][self.player_role][stage]
+        options = self.trial["statement_options"][self.player_role][stage]
         yield judge_line(f"现在请{role['name']}提交“{title}”，发言将直接记入庭审记录。")
         yield {"type": "checkpoint", "kind": "role_input", "stage": stage,
                "role": self.player_role, "role_name": role["name"], "badge": role["badge"],
@@ -364,8 +292,8 @@ class TrialEngine:
             yield judge_line(f"书记员记录：人民陪审员在法庭调查后的阶段意见为——{label}。")
             question = (data.get("question") or "").strip()
             target = (data.get("target") or "").strip()
-            if question and target in ROLES and target != "clerk":
-                role = ROLES[target]
+            if question and target in self.roles and target != "clerk":
+                role = self.roles[target]
                 self.questions.append({"target": target, "question": question[:200]})
                 yield judge_line(f"人民陪审员向{role['name']}发问：“{question}”请当庭作答。")
                 task = (f"人民陪审员在法庭调查结束后向你发问：“{question}”\n"
@@ -434,7 +362,7 @@ class TrialEngine:
             when = "法庭调查后" if p["stage"] == "investigation" else "法庭辩论后"
             trail.append(f"{when}预判：{p['label']}")
         for q in self.questions:
-            trail.append(f"庭审中向{ROLES[q['target']]['name']}发问：“{q['question']}”")
+            trail.append(f"庭审中向{self.roles[q['target']]['name']}发问：“{q['question']}”")
         for item in self.contributions:
             when = "法庭调查后" if item["stage"] == "investigation" else "法庭辩论后"
             trail.append(f"{when}以{item['name']}身份发言：“{item['text']}”")
@@ -442,7 +370,7 @@ class TrialEngine:
             parts.append("【用户庭审参与轨迹】\n" + "\n".join(trail))
         final_label = "人民陪审员评议" if self.player_role == "juror" else "用户最终裁判预测"
         parts.append(f"【{final_label}】\n{jury_text}")
-        role = ROLES["judge_review"]
+        role = self.roles["judge_review"]
         messages = [{"role": "system", "content": role["system"]},
                     {"role": "user", "content": "\n\n".join(parts)}]
         yield {"type": "turn_start", "role": "judge_review", "name": "审判长", "badge": JUDGE_BADGE}

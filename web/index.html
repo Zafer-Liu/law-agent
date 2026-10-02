@@ -141,6 +141,12 @@
       <p class="muted">选择案件后，可以全程旁听，也可担任陪审员或诉讼角色，在关键节点亲自参与。</p>
       <p class="court-safety">完整体验约 5 分钟；中途可暂停或退出，庭审记录不会影响下一次体验。</p>
       <div id="case-cards" class="case-cards"></div>
+      <div id="court-reviews" class="court-reviews" hidden>
+        <span class="section-kicker">复盘记录</span>
+        <h3>你参与过的庭审</h3>
+        <p class="muted">庭审结束后可以随时回看当时的评议对照与审判长复盘。</p>
+        <div id="review-list" class="review-list"></div>
+      </div>
     </div>
 
     <!-- 角色选择 -->
@@ -148,6 +154,10 @@
       <button id="role-back" class="back-btn" type="button">返回案件列表</button>
       <span class="section-kicker">选择庭审身份</span>
       <h2 id="role-case-title"></h2>
+      <div id="case-video-block" class="case-video-block" hidden>
+        <div class="case-video-head">案件介绍 <small>（约 45 秒，可选观看）</small></div>
+        <video id="case-video" class="case-video" controls preload="metadata" playsinline></video>
+      </div>
       <p class="muted">想轻松看完全程可选“旁听观众”；选择诉讼角色后，关键发言会直接出现在庭审中央。</p>
       <div class="role-options" aria-label="庭审角色">
         <button class="role-option audience-option" type="button" aria-pressed="false" data-role="audience">

@@ -22,6 +22,7 @@ from flask import (
     g,
     jsonify,
     request,
+    send_file,
     send_from_directory,
     stream_with_context,
 )
@@ -945,6 +946,7 @@ def create_app() -> Flask:
         items = [{key: case[key] for key in
                   ("id", "title", "subtitle", "theme", "duration", "charge", "disclaimer",
                    "entry_note", "learning_goal")}
+                 | {"has_video": court_cases.video_path(case) is not None}
                  for case in court_cases.CASES.values()]
         return jsonify({"cases": items})
 
@@ -953,7 +955,20 @@ def create_app() -> Flask:
         case = court_cases.CASES.get(case_id)
         if not case:
             abort(404, "案例不存在")
-        return jsonify(court_cases.public_case(case))
+        view = court_cases.public_case(case)
+        view["has_video"] = court_cases.video_path(case) is not None
+        return jsonify(view)
+
+    @app.get("/api/court/cases/<case_id>/video")
+    def court_case_video(case_id):
+        """案件介绍视频（Range 流式，供 <video> 拖动进度）。"""
+        case = court_cases.CASES.get(case_id)
+        if not case:
+            abort(404, "案例不存在")
+        path = court_cases.video_path(case)
+        if not path:
+            abort(404, "该案件暂无介绍视频")
+        return send_file(path, mimetype="video/mp4", conditional=True)
 
     @app.post("/api/court/cases/<case_id>/trial")
     def court_trial(case_id):
@@ -1106,5 +1121,64 @@ def create_app() -> Flask:
                 yield sse({"type": "pet", "pet": pet})
 
         return Response(stream_with_context(stream()), mimetype="text/event-stream")
+
+    @app.get("/api/court/sessions")
+    def court_session_list():
+        """当前用户已完成评议的庭审列表（复盘入口）。"""
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            rows = db.execute(
+                "SELECT id, case_id, state, deliberation, finished_at FROM court_sessions"
+                " WHERE owner_id=? AND deliberation IS NOT NULL"
+                " ORDER BY finished_at DESC LIMIT 20", (identity,)).fetchall()
+        items = []
+        for row in rows:
+            case = court_cases.CASES.get(row["case_id"])
+            if not case:
+                continue
+            deliberation = json.loads(row["deliberation"] or "null")
+            if not deliberation:
+                continue
+            items.append({
+                "session_id": row["id"],
+                "case_id": row["case_id"],
+                "title": case["title"],
+                "subtitle": case["subtitle"],
+                "theme": case["theme"],
+                "finished_at": row["finished_at"],
+                "your_label": deliberation.get("label", ""),
+            })
+        return jsonify({"sessions": items})
+
+    @app.get("/api/court/sessions/<session_id>/review")
+    def court_session_review(session_id):
+        """复盘详情：已存储的评议、法院裁判与审判长复盘，不再调用模型。"""
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            row = db.execute("SELECT * FROM court_sessions WHERE id=?", (session_id,)).fetchone()
+        if not row or row["owner_id"] != identity:
+            abort(404, "庭审会话不存在")
+        if not row["deliberation"]:
+            abort(409, "该会话尚未完成评议")
+        case = court_cases.CASES.get(row["case_id"])
+        if not case:
+            abort(404, "案例不存在")
+        state = json.loads(row["state"] or "null") or {}
+        deliberation = json.loads(row["deliberation"] or "null") or {}
+        polls = state.get("polls") or []
+        contributions = state.get("contributions") or []
+        marks = deliberation.get("marks") or []
+        return jsonify({
+            "session_id": session_id,
+            "case": court_cases.public_case(case, with_dossier=True),
+            "finished_at": row["finished_at"],
+            "deliberation": deliberation,
+            "trajectory": [{"stage": p.get("stage"), "label": p.get("label", "")} for p in polls],
+            "contributions": [{"name": c.get("name", ""), "stage": c.get("stage", ""),
+                                "text": c.get("text", "")} for c in contributions],
+            "marks": [m for m in marks if any(e["id"] == m for e in case["dossier"])],
+            "real_verdict": case["real_verdict"],
+            "analysis": row["analysis"] or "",
+        })
 
     return app

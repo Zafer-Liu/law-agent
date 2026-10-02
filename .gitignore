@@ -19,3 +19,4 @@ Thumbs.db
 # Local design drafts / logo candidates
 design/
 /.zvec-grep
+/.playwright-mcp
