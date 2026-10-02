@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS pet_progress (
     court_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pet_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_event_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pet_memories_client ON pet_memories(client_id, id);
+CREATE TABLE IF NOT EXISTS pet_reward_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('qa','court')),
+    gain INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(client_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS pet_reward_events_client
+    ON pet_reward_events(client_id, created_at);
 """
 
 
@@ -93,6 +112,42 @@ class Database:
                 pass  # 列已存在
             db.execute("CREATE INDEX IF NOT EXISTS conversations_owner"
                        " ON conversations(owner_id, created_at)")
+            # 旧库迁移：记忆关联唯一业务事件，避免请求重试产生重复记录。
+            try:
+                db.execute("ALTER TABLE pet_memories"
+                           " ADD COLUMN source_event_id TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+            db.execute("DROP INDEX IF EXISTS pet_memories_event")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS pet_memories_event"
+                       " ON pet_memories(client_id,source_event_id)"
+                       " WHERE source_event_id <> ''")
+            # 旧库迁移：奖励事件曾把 event_id 设为全局主键，不同浏览器若碰巧
+            # 使用同一请求标识会互相阻断；迁移为 (client_id,event_id) 唯一。
+            reward_columns = db.execute(
+                "PRAGMA table_info(pet_reward_events)").fetchall()
+            event_column = next(
+                (row for row in reward_columns if row["name"] == "event_id"), None)
+            if event_column and event_column["pk"]:
+                db.executescript("""
+                    ALTER TABLE pet_reward_events RENAME TO pet_reward_events_legacy;
+                    CREATE TABLE pet_reward_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_id TEXT NOT NULL,
+                        client_id TEXT NOT NULL,
+                        kind TEXT NOT NULL CHECK(kind IN ('qa','court')),
+                        gain INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(client_id, event_id)
+                    );
+                    INSERT OR IGNORE INTO pet_reward_events
+                        (event_id,client_id,kind,gain,created_at)
+                    SELECT event_id,client_id,kind,gain,created_at
+                    FROM pet_reward_events_legacy;
+                    DROP TABLE pet_reward_events_legacy;
+                    CREATE INDEX IF NOT EXISTS pet_reward_events_client
+                        ON pet_reward_events(client_id, created_at);
+                """)
 
     @contextmanager
     def connect(self):

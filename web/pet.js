@@ -1,23 +1,25 @@
-/* 法晓 · 獬豸桌宠：sprite 帧动画 + 眼随鼠标 + 聊天联动 + 成长进度
+/* 法晓 · 獬豸桌宠（3D 版）：Three.js 实时渲染的立体獬豸
  *
- * 帧资产 web/pet/*.png（MiniMax 生成，白底统一裁剪）。
- * 与 app.js 通过 window 自定义事件解耦：
- *   pet:ask    { }            —— 用户发出问题
- *   pet:status { text }       —— 检索/生成阶段文案
- *   pet:answer { pet }        —— 回答完成（pet 为后端成长状态）
- *   pet:error  { }            —— 回答失败
- *   pet:pet    { pet }        —— 庭审完成（成长状态）
+ * 程序化建模（无外部模型文件）：圆头 + 金色螺旋独角 + 红色鬃毛围领 + 棕色弯角，
+ * 头部/眼球/耳朵/尾巴各自独立运动——
+ *   · 眼随鼠标：眼球先动、头部平滑跟上（弹簧阻尼），全身呼吸起伏
+ *   · 可拖拽移动（Pointer Events，位置记忆在 localStorage），无卡片透明背景
+ *   · 打字：左右扫读式摇头，耳朵竖起
+ *   · 生成中：抬头思考、缓慢侧倾
+ *   · 完成：原地弹跳、尾巴快摆
+ *   · 出错：快速摇头
+ *   · 60s 无操作：低头打盹
+ *
+ * 与 app.js / court.js 的 window 自定义事件契约不变：
+ *   pet:ask / pet:status {text} / pet:answer {pet} / pet:error / pet:pet {pet}
+ * 成长系统走 /api/pet（六阶段），见 legalweb/app.py。
+ * three.js 本地自托管于 assets/vendor/；WebGL 不可用时回退为静态 sprite。
  */
 (function () {
   "use strict";
 
   const API_BASE = location.pathname.replace(/\/[^/]*$/, "");
-  const ASSET = (name) => `${API_BASE}/assets/pet/${name}.png`;
-
-  const FRAMES = ["idle", "blink", "look-left", "look-right",
-    "happy", "thinking", "typing", "sleepy"];
   const SLEEP_AFTER_MS = 60000;
-  const LOOK_DEADZONE = 90;
 
   const chatArea = document.querySelector(".chat-area");
   if (!chatArea) return;
@@ -26,137 +28,104 @@
   const root = document.createElement("div");
   root.className = "pet-root";
   root.innerHTML = `
-    <div class="pet-panel" role="dialog" aria-label="獬豸成长面板">
-      <div class="pet-panel-head"><strong class="pet-stage-name">幼獬</strong>
-        <small class="pet-exp-text">0 经验</small></div>
+    <div class="pet-panel" id="pet-panel" role="dialog" aria-labelledby="pet-panel-title" hidden>
+      <div class="pet-panel-head">
+        <div><h2 id="pet-panel-title" class="pet-stage-name">幼獬</h2>
+          <small class="pet-exp-text">0 经验</small></div>
+        <button class="pet-panel-close" type="button" aria-label="关闭成长面板">×</button>
+      </div>
+      <div class="pet-panel-status" role="status" hidden>
+        <span class="pet-panel-status-text"></span>
+        <button class="pet-retry-btn" type="button">重试</button>
+      </div>
       <p class="pet-panel-title">初识人间，蹒跚学步</p>
-      <div class="pet-bar"><div class="pet-bar-fill" style="width:0%"></div></div>
+      <p class="pet-stage-appearance">幼角初生，浅色鬃毛</p>
+      <div class="pet-bar" role="progressbar" aria-label="当前成长阶段进度"
+        aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="pet-bar-fill"></div></div>
       <div class="pet-bar-note"><span class="pet-progress-note"></span>
         <span class="pet-next-note"></span></div>
       <div class="pet-stats">
         <div class="pet-stat"><b class="pet-qa-n">0</b><span>完成问答</span></div>
         <div class="pet-stat"><b class="pet-court-n">0</b><span>完成庭审</span></div>
       </div>
-      <div class="pet-stages-row"></div>
+      <p class="pet-earn-rules">有依据的问答 +2 · 完成模拟庭审 +10</p>
+      <div class="pet-stages-row" role="list" aria-label="成长阶段"></div>
+      <div class="pet-panel-actions" role="group" aria-label="宠物操作">
+        <button class="pet-pat-btn" type="button">摸摸獬豸</button>
+        <button class="pet-reset-btn" type="button" hidden>恢复位置</button>
+        <button class="pet-memory-clear" type="button" hidden>清空记忆</button>
+        <button class="pet-hide-btn" type="button">隐藏宠物</button>
+      </div>
+      <details class="pet-rewards">
+        <summary>最近成长记录</summary>
+        <ul class="pet-reward-list"></ul>
+        <p class="pet-reward-empty">完成有依据的问答或模拟庭审后，记录会出现在这里。</p>
+      </details>
+      <div class="pet-memories">
+        <div class="pet-memories-head">獬豸的记忆<small class="pet-memory-count"></small></div>
+        <p class="pet-memory-consent"></p>
+        <ul class="pet-memory-list"></ul>
+        <p class="pet-memory-empty" hidden>还没有记忆，完成一次问答后獬豸就会记住这次咨询</p>
+      </div>
     </div>
-    <div class="pet-bubble" aria-hidden="true"></div>
-    <button class="pet-badge" type="button" data-stage="cub"
-      aria-label="法晓的獬豸宠物，点击查看成长">
-      <div class="pet-sprite"></div>
+    <div class="pet-bubble" role="status" aria-live="polite" aria-atomic="true"></div>
+    <button class="pet-badge pet-fallback" type="button" data-stage="cub"
+      data-state="idle" data-look="center"
+      aria-label="法晓的獬豸宠物，点击查看成长" aria-expanded="false"
+      aria-controls="pet-panel">
+      <canvas class="pet-canvas" aria-hidden="true"></canvas>
       <span class="pet-stage-chip">幼獬</span>
     </button>`;
   chatArea.appendChild(root);
   const badge = root.querySelector(".pet-badge");
-  const sprite = root.querySelector(".pet-sprite");
+  const canvas = root.querySelector(".pet-canvas");
   const chip = root.querySelector(".pet-stage-chip");
   const bubble = root.querySelector(".pet-bubble");
   const panel = root.querySelector(".pet-panel");
+  const panelClose = root.querySelector(".pet-panel-close");
+  const progressBar = root.querySelector(".pet-bar");
+  const memoryClear = root.querySelector(".pet-memory-clear");
+  const panelStatus = root.querySelector(".pet-panel-status");
+  const panelStatusText = root.querySelector(".pet-panel-status-text");
+  const retryButton = root.querySelector(".pet-retry-btn");
+  const patButton = root.querySelector(".pet-pat-btn");
+  const resetButton = root.querySelector(".pet-reset-btn");
 
-  // ---- 帧加载 ----
-  const loaded = new Set();
-  function loadFrame(name) {
-    if (loaded.has(name)) return;
-    loaded.add(name);
-    const img = new Image();
-    img.src = ASSET(name);
-  }
-  loadFrame("idle");
-  const idlePreload = () => FRAMES.forEach(loadFrame);
-  if ("requestIdleCallback" in window) {
-    requestIdleCallback(idlePreload, { timeout: 4000 });
-  } else {
-    setTimeout(idlePreload, 2000);
-  }
-
-  // ---- 状态机 ----
-  let state = "idle";
-  let blinkTimer = 0;
+  // ---- 状态机（与渲染层解耦：3D 循环读取这些变量） ----
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let state = "idle";              // idle | typing | thinking | happy | sleepy
+  let stateEnteredAt = 0;
   let stateTimer = 0;
-  let lastActivity = Date.now();
   let generating = false;
-
-  function showFrame(name) { sprite.style.backgroundImage = `url("${ASSET(name)}")`; }
-  showFrame("idle");
-
-  function clearTimers() {
-    clearTimeout(blinkTimer);
-    clearTimeout(stateTimer);
-  }
+  let errorShakeUntil = 0;
+  let lastActivity = Date.now();
+  const look = { x: 0, y: 0 };     // 光标相对宠物中心的归一化偏移（约 -2..2）
 
   function setState(next) {
-    clearTimers();
+    if (state === next) return;
+    const previous = state;
     state = next;
-    badge.classList.remove("anim-wiggle", "anim-bounce", "anim-shake", "anim-float");
-    if (next === "idle") {
-      showFrame("idle");
-      badge.classList.add("anim-float");
-      scheduleBlink();
-    } else if (next === "typing") {
-      showFrame("typing");
-      badge.classList.add("anim-wiggle");
-    } else if (next === "thinking") {
-      showFrame("thinking");
-      badge.classList.add("anim-wiggle");
-    } else if (next === "happy") {
-      showFrame("happy");
-      badge.classList.add("anim-bounce");
-      stateTimer = setTimeout(() => setState("idle"), 2200);
-    } else if (next === "sleepy") {
-      showFrame("sleepy");
-    } else if (next === "look-left" || next === "look-right") {
-      showFrame(next);
+    badge.dataset.state = next;
+    stateEnteredAt = performance.now();
+    clearTimeout(stateTimer);
+    if (previous === "sleepy" && next !== "sleepy") hideBubble();
+    if (next === "happy") {
+      stateTimer = setTimeout(() => { if (state === "happy") setState("idle"); }, 1600);
     }
   }
 
-  function scheduleBlink() {
-    blinkTimer = setTimeout(() => {
-      if (state !== "idle") return;
-      showFrame("blink");
-      setTimeout(() => { if (state === "idle") showFrame("idle"); }, 170);
-      scheduleBlink();
-    }, 2400 + Math.random() * 2600);
-  }
-  setState("idle");
-
-  // ---- 眼随鼠标：方向帧 + 容器微倾 ----
-  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let mouse = null;
-  let rafPending = false;
-
-  function applyLook() {
-    rafPending = false;
-    if (!mouse || generating || state === "typing" || state === "happy") return;
-    const rect = badge.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const dx = mouse.x - cx;
-    const dy = mouse.y - cy;
-    if (Math.hypot(dx, dy) < LOOK_DEADZONE) {
-      if (state === "look-left" || state === "look-right") setState("idle");
-      sprite.style.transform = "";
-      return;
-    }
-    const dir = dx < 0 ? "look-left" : "look-right";
-    if (state === "idle" || state === "look-left" || state === "look-right") {
-      setState(dir);
-      clearTimers(); // 方向帧不参与眨眼调度
-      const tilt = Math.max(-1, Math.min(1, dx / 420)) * 5;
-      const lift = Math.max(-1, Math.min(1, dy / 420)) * 3;
-      sprite.style.transform = reduceMotion
-        ? "" : `rotate(${tilt.toFixed(1)}deg) translateY(${(-lift).toFixed(1)}px)`;
-    }
-  }
-
-  if (!reduceMotion && matchMedia("(pointer: fine)").matches) {
+  // ---- 眼/头随鼠标（方向计算与渲染无关，回退模式同样可用） ----
+  if (matchMedia("(pointer: fine)").matches) {
     window.addEventListener("mousemove", (e) => {
-      mouse = { x: e.clientX, y: e.clientY };
       lastActivity = Date.now();
       if (state === "sleepy") setState("idle");
-      if (!rafPending) {
-        rafPending = true;
-        requestAnimationFrame(applyLook);
-      }
+      const r = badge.getBoundingClientRect();
+      look.x = (e.clientX - (r.left + r.width / 2)) / Math.max(window.innerWidth / 2, 1);
+      look.y = (e.clientY - (r.top + r.height / 2)) / Math.max(window.innerHeight / 2, 1);
+      badge.dataset.look = look.x < -0.08 ? "left" : look.x > 0.08 ? "right" : "center";
     }, { passive: true });
+    badge.addEventListener("pointerleave", () => { badge.dataset.look = "center"; });
   }
 
   // ---- 打字动画 ----
@@ -166,7 +135,7 @@
     qaInput.addEventListener("input", () => {
       lastActivity = Date.now();
       if (generating) return;
-      if (state !== "typing") setState("typing");
+      setState("typing");
       clearTimeout(typeTimer);
       typeTimer = setTimeout(() => {
         if (!generating && state === "typing") setState("idle");
@@ -179,6 +148,7 @@
     if (!generating && Date.now() - lastActivity > SLEEP_AFTER_MS
       && state !== "sleepy") {
       setState("sleepy");
+      say("Zzz…", 0);
     }
   }, 5000);
 
@@ -200,14 +170,44 @@
     try { return localStorage.getItem("faxiao_client_id") || ""; } catch { return ""; }
   }
 
+  const MEMORY_KEY = "faxiao_pet_memory_enabled";
+  const ONBOARDING_KEY = "faxiao_pet_onboarding_seen";
+  let currentPet = null;
+  let petFetchController = null;
+  let memoryMutationPending = false;
+  let onboardingTimer = 0;
+  function isMemoryEnabled() {
+    try { return localStorage.getItem(MEMORY_KEY) === "1"; } catch { return false; }
+  }
+
+  function formatPetDate(value) {
+    const date = new Date(value || "");
+    if (Number.isNaN(date.getTime())) return "";
+    return new Intl.DateTimeFormat("zh-CN", {
+      month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+    }).format(date);
+  }
+
+  function setPanelStatus(kind, text = "") {
+    panelStatus.hidden = !kind;
+    panelStatus.dataset.kind = kind || "";
+    panelStatusText.textContent = text;
+    retryButton.hidden = kind !== "error";
+  }
+
   function renderPet(pet) {
     if (!pet) return;
+    currentPet = pet;
     chip.textContent = pet.stage_name;
     chip.parentElement.dataset.stage = pet.stage;
+    badge.setAttribute("aria-label", `法晓的獬豸宠物，当前阶段${pet.stage_name}，点击查看成长`);
     root.querySelector(".pet-stage-name").textContent = pet.stage_name;
     root.querySelector(".pet-panel-title").textContent = pet.stage_title;
+    root.querySelector(".pet-stage-appearance").textContent = `当前外观 · ${pet.stage_appearance || "随成长逐渐变化"}`;
     root.querySelector(".pet-exp-text").textContent = `${pet.exp} 经验`;
-    root.querySelector(".pet-bar-fill").style.width = `${pet.progress}%`;
+    root.querySelector(".pet-bar-fill").style.setProperty("--pet-progress", pet.progress / 100);
+    progressBar.setAttribute("aria-valuenow", String(pet.progress));
+    progressBar.setAttribute("aria-valuetext", `本阶段完成 ${pet.progress}%`);
     root.querySelector(".pet-progress-note").textContent = `本阶段 ${pet.progress}%`;
     root.querySelector(".pet-next-note").textContent = pet.next_stage_name
       ? `还差 ${pet.next_need} 经验到「${pet.next_stage_name}」` : "已达最高阶段";
@@ -216,93 +216,811 @@
     const row = root.querySelector(".pet-stages-row");
     row.innerHTML = "";
     (pet.stages || []).forEach((s, i) => {
+      const step = document.createElement("span");
+      step.className = "pet-stage-step" + (i === pet.stage_index ? " current" : "");
+      step.setAttribute("role", "listitem");
+      step.setAttribute("aria-label", `${s.name}，${i <= pet.stage_index ? "已到达" : `需要 ${s.need} 经验`}`);
+      if (i === pet.stage_index) step.setAttribute("aria-current", "step");
       const dot = document.createElement("span");
       dot.className = "pet-stage-dot" + (i <= pet.stage_index ? " reached" : "");
-      dot.title = s.name;
-      row.appendChild(dot);
+      dot.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.className = "pet-stage-label";
+      label.textContent = s.name;
+      step.append(dot, label);
+      row.appendChild(step);
+    });
+    const rewards = pet.recent_rewards || [];
+    const rewardList = root.querySelector(".pet-reward-list");
+    rewardList.innerHTML = "";
+    rewards.forEach((reward) => {
+      const li = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = reward.kind === "court" ? "完成模拟庭审" : "完成有依据的问答";
+      const meta = document.createElement("span");
+      meta.className = "pet-reward-meta";
+      meta.textContent = `+${reward.gain} · ${formatPetDate(reward.created_at)}`;
+      li.append(label, meta);
+      rewardList.appendChild(li);
+    });
+    root.querySelector(".pet-reward-empty").hidden = rewards.length > 0;
+    // 记忆库（后端按问答蒸馏，textContent 写入防注入）
+    const memories = pet.memories || [];
+    root.querySelector(".pet-memory-count").textContent =
+      memories.length ? `共 ${pet.memory_count} 条` : "";
+    root.querySelector(".pet-memory-consent").textContent = isMemoryEnabled()
+      ? "已开启：仅记录有法律依据的问答摘要，可随时清空。"
+      : "当前关闭：不会继续生成新的咨询记忆。";
+    const memList = root.querySelector(".pet-memory-list");
+    memList.innerHTML = "";
+    memories.forEach((m) => {
+      const li = document.createElement("li");
+      li.className = "pet-memory-item";
+      const copy = document.createElement("span");
+      copy.className = "pet-memory-copy";
+      copy.textContent = m.content;
+      const time = document.createElement("time");
+      time.dateTime = m.created_at || "";
+      time.textContent = formatPetDate(m.created_at);
+      const remove = document.createElement("button");
+      remove.className = "pet-memory-delete";
+      remove.type = "button";
+      remove.textContent = "删除";
+      remove.setAttribute("aria-label", `删除记忆：${m.content}`);
+      remove.addEventListener("click", () => deleteMemory(m));
+      const body = document.createElement("span");
+      body.className = "pet-memory-body";
+      body.append(copy, time);
+      li.append(body, remove);
+      memList.appendChild(li);
+    });
+    const empty = root.querySelector(".pet-memory-empty");
+    empty.textContent = isMemoryEnabled()
+      ? "还没有记忆；完成一次有依据的问答后会生成摘要。"
+      : "可在设置中主动开启咨询记忆。";
+    empty.hidden = memories.length > 0;
+    memoryClear.hidden = !pet.memory_count;
+    setPanelStatus("", "");
+    if (petScene) applyStageAppearance(petScene, pet.stage_index);
+  }
+
+  async function fetchPet({ showLoading = false } = {}) {
+    const id = getClientId();
+    if (id.length < 8) {
+      setPanelStatus("error", "无法读取浏览器标识，请刷新页面后重试。");
+      return null;
+    }
+    if (petFetchController) petFetchController.abort();
+    const controller = new AbortController();
+    petFetchController = controller;
+    if (showLoading) {
+      setPanelStatus("loading", currentPet ? "正在刷新成长记录…" : "正在读取成长记录…");
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/pet?client_id=${encodeURIComponent(id)}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`pet ${res.status}`);
+      const pet = await res.json();
+      if (controller.signal.aborted) return null;
+      renderPet(pet);
+      stageIndex = pet.stage_index;
+      lastExp = pet.exp;
+      maybeShowOnboarding();
+      return pet;
+    } catch (error) {
+      if (error && error.name === "AbortError") return null;
+      setPanelStatus("error", "成长记录暂时无法读取，宠物仍可继续陪伴。");
+      return null;
+    } finally {
+      if (petFetchController === controller) petFetchController = null;
+    }
+  }
+  function growthFeedback(pet, prevIndex, gain, action) {
+    const upgraded = pet && pet.stage_index > prevIndex;
+    setState("happy");
+    if (upgraded) {
+      chip.classList.remove("milestone");
+      // 重新读取布局让连续跨级时也能可靠触发一次里程碑动效。
+      void chip.offsetWidth;
+      chip.classList.add("milestone");
+      setTimeout(() => chip.classList.remove("milestone"), 1500);
+      say(`额角亮起 · 成长为「${pet.stage_name}」${gain ? ` · +${gain} 经验` : ""}`, 4800);
+      return;
+    }
+    say(gain ? `${action} · +${gain} 经验` : action, 2400);
+  }
+  let stageIndex = 0;
+  let lastExp = NaN;             // 经验基线：回答完成时算 +N 经验给气泡
+
+  function markOnboardingSeen() {
+    clearTimeout(onboardingTimer);
+    onboardingTimer = 0;
+    try { localStorage.setItem(ONBOARDING_KEY, "1"); } catch { /* 本次展示仍然有效 */ }
+  }
+
+  function maybeShowOnboarding() {
+    if (onboardingTimer || root.style.display === "none") return;
+    try { if (localStorage.getItem(ONBOARDING_KEY) === "1") return; } catch { /* 继续本次提示 */ }
+    onboardingTimer = setTimeout(() => {
+      onboardingTimer = 0;
+      if (root.style.display === "none" || generating) return;
+      say("点我看成长，拖动可换位置", 5200);
+      markOnboardingSeen();
+    }, 1200);
+  }
+
+  const PAT_LINES = {
+    cub: ["幼獬蹭了蹭你的手", "它还小，但已经认得你了"],
+    dawn: ["独角轻轻亮了一下", "它正努力辨认是非曲直"],
+    keen: ["目光炯炯，像是发现了新线索", "它认真听着，也认真陪着"],
+    just: ["金色轮廓微微发亮", "守正不阿，也记得温柔"],
+    sage: ["鬃毛轻摆，神情从容", "明察秋毫，也不忘耐心"],
+    luck: ["祥瑞金辉在身边流转", "它安静地守在你身旁"],
+  };
+  let patCount = 0;
+
+  function patPet() {
+    markOnboardingSeen();
+    ensure3D();
+    setState("happy");
+    lastActivity = Date.now();
+    const lines = PAT_LINES[currentPet && currentPet.stage] || PAT_LINES.cub;
+    say(lines[patCount++ % lines.length], 3000);
+  }
+
+  // ---- 显示/隐藏：面板按钮隐藏；设置抽屉经 pet:visibility 事件重新开启 ----
+  const HIDDEN_KEY = "faxiao_pet_hidden";
+  const POSITION_KEY = "faxiao_pet_pos";
+  function setPetVisible(visible) {
+    root.style.display = visible ? "" : "none";
+    try {
+      if (visible) localStorage.removeItem(HIDDEN_KEY);
+      else localStorage.setItem(HIDDEN_KEY, "1");
+    } catch { /* 存储不可用则只影响本次会话 */ }
+    if (visible) {
+      ensure3D();
+      setState("happy");
+      say("我回来啦！", 2400);
+      lastActivity = Date.now();
+      fetchPet();
+    } else {
+      cancelScheduled3D();
+      loopRunning = false;
+      closePanel(false);
+      hideBubble();
+    }
+  }
+  root.querySelector(".pet-hide-btn").addEventListener("click", () => {
+    // 走事件总线：pet.js 自己的监听器执行隐藏，app.js 的设置开关同步状态
+    window.dispatchEvent(new CustomEvent("pet:visibility", { detail: { visible: false } }));
+    if (typeof window.toast === "function") window.toast("獬豸已隐藏，可在右上角设置中重新开启");
+  });
+  window.addEventListener("pet:visibility", (e) => {
+    setPetVisible(!(e.detail && e.detail.visible === false));
+  });
+  window.addEventListener("pet:memory-preference", () => {
+    if (currentPet) renderPet(currentPet);
+  });
+  let initiallyHidden = false;
+  try {
+    initiallyHidden = localStorage.getItem(HIDDEN_KEY) === "1";
+    if (initiallyHidden) root.style.display = "none";
+  } catch { /* 忽略存储异常 */ }
+  if (!initiallyHidden) fetchPet();
+
+  // ---- 面板开关 ----
+  let panelHideTimer = 0;
+  function closePanel(restoreFocus = false) {
+    if (badge.getAttribute("aria-expanded") !== "true") return;
+    clearTimeout(panelHideTimer);
+    panel.classList.remove("show");
+    badge.setAttribute("aria-expanded", "false");
+    if (reduceMotion) panel.hidden = true;
+    else panelHideTimer = setTimeout(() => {
+      if (badge.getAttribute("aria-expanded") === "false") panel.hidden = true;
+    }, 210);
+    if (restoreFocus) badge.focus();
+  }
+
+  function openPanel() {
+    clearTimeout(panelHideTimer);
+    markOnboardingSeen();
+    hideBubble();
+    panel.hidden = false;
+    badge.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => {
+      if (badge.getAttribute("aria-expanded") === "true") panel.classList.add("show");
+    });
+    fetchPet({ showLoading: true });
+    ensure3D();
+    setState("happy");
+    panelClose.focus();
+  }
+
+  badge.addEventListener("click", () => {
+    if (suppressClick) { suppressClick = false; return; }  // 刚拖拽完，不当点击处理
+    if (badge.getAttribute("aria-expanded") !== "true") openPanel();
+    else closePanel(true);
+  });
+  panelClose.addEventListener("click", () => closePanel(true));
+  patButton.addEventListener("click", patPet);
+  retryButton.addEventListener("click", () => fetchPet({ showLoading: true }));
+  document.addEventListener("click", (e) => {
+    if (!root.contains(e.target)) closePanel(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && badge.getAttribute("aria-expanded") === "true") {
+      e.preventDefault();
+      closePanel(true);
+    }
+  });
+
+  async function deleteMemory(memory) {
+    if (memoryMutationPending || !memory || !Number.isInteger(memory.id)) return;
+    if (!window.confirm(`确定删除这条咨询记忆吗？\n\n${memory.content}`)) return;
+    const id = getClientId();
+    if (id.length < 8) return;
+    setMemoryMutationPending(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/pet/memories/${memory.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: id }),
+      });
+      if (!res.ok) throw new Error("delete failed");
+      const result = await res.json();
+      await fetchPet();
+      if (typeof window.toast === "function") {
+        window.toast(result.deleted ? "已删除这条咨询记忆" : "这条记忆已不存在");
+      }
+    } catch {
+      if (typeof window.toast === "function") window.toast("记忆删除失败，请稍后重试");
+    } finally {
+      setMemoryMutationPending(false);
+    }
+  }
+
+  function setMemoryMutationPending(pending) {
+    memoryMutationPending = pending;
+    memoryClear.disabled = pending;
+    root.querySelectorAll(".pet-memory-delete").forEach((button) => {
+      button.disabled = pending;
     });
   }
 
-  async function fetchPet() {
+  async function clearMemories() {
+    if (memoryMutationPending) return;
+    if (!window.confirm("确定清空獬豸保存的全部咨询记忆吗？此操作无法撤销。")) return;
     const id = getClientId();
     if (id.length < 8) return;
+    setMemoryMutationPending(true);
     try {
-      const res = await fetch(`${API_BASE}/api/pet?client_id=${encodeURIComponent(id)}`);
-      if (res.ok) {
-        const pet = await res.json();
-        renderPet(pet);
-        stageIndex = pet.stage_index;
+      const res = await fetch(`${API_BASE}/api/pet/memories`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: id }),
+      });
+      if (!res.ok) throw new Error("delete failed");
+      const result = await res.json();
+      await fetchPet();
+      if (typeof window.toast === "function") {
+        window.toast(result.deleted ? `已清空 ${result.deleted} 条咨询记忆` : "当前没有可清空的记忆");
       }
-    } catch { /* 离线/后端不可用不影响宠物本体 */ }
-  }
-  fetchPet();
-
-  function stageUp(pet, prevIndex) {
-    if (pet && pet.stage_index > prevIndex) {
-      setState("happy");
-      say(`升级啦！獬豸成长为「${pet.stage_name}」`, 4200);
+    } catch {
+      if (typeof window.toast === "function") window.toast("记忆清空失败，请稍后重试");
+    } finally {
+      setMemoryMutationPending(false);
     }
   }
-  let stageIndex = 0;
-
-  // ---- 面板开关 ----
-  badge.addEventListener("click", () => {
-    const open = panel.classList.toggle("show");
-    badge.setAttribute("aria-expanded", String(open));
-    if (open) {
-      fetchPet();
-      setState("happy");
-      setTimeout(() => { if (!generating) setState("idle"); }, 1400);
-    }
-  });
-  document.addEventListener("click", (e) => {
-    if (!root.contains(e.target)) panel.classList.remove("show");
-  });
+  memoryClear.addEventListener("click", clearMemories);
+  window.addEventListener("pet:clear-memories", clearMemories);
 
   // ---- 聊天联动事件（app.js / court.js 派发） ----
   window.addEventListener("pet:ask", () => {
+    markOnboardingSeen();
     generating = true;
     lastActivity = Date.now();
     setState("thinking");
+    say("思考中", 0);                       // 立即出现，之后由 status 事件更新
+    bubble.classList.add("thinking");
   });
   window.addEventListener("pet:status", (e) => {
     if (generating) say(e.detail && e.detail.text ? e.detail.text : "思考中…", 0);
   });
   window.addEventListener("pet:answer", (e) => {
     generating = false;
+    bubble.classList.remove("thinking");
     hideBubble();
     const pet = e.detail && e.detail.pet;
+    let gain = null;
+    if (pet && Number.isFinite(pet.exp)) {
+      if (Number.isFinite(pet.gained) && pet.gained > 0) gain = pet.gained;
+      else if (Number.isFinite(lastExp) && pet.exp > lastExp) gain = pet.exp - lastExp;
+      lastExp = pet.exp;
+    }
     if (pet) {
-      stageUp(pet, stageIndex);
+      const previousStage = stageIndex;
       stageIndex = pet.stage_index;
       renderPet(pet);
+      growthFeedback(pet, previousStage, gain, "回答完成");
+    } else {
+      setState("happy");
+      say("回答完成", 2400);
     }
-    if (state !== "happy") setState("happy");
-    say("回答完成", 2400);
     lastActivity = Date.now();
+    // 仅在用户正在查看面板且主动开启记忆时补拉一次，避免每次回答固定轮询。
+    if (badge.getAttribute("aria-expanded") === "true" && isMemoryEnabled()) {
+      setTimeout(() => {
+        if (badge.getAttribute("aria-expanded") === "true") fetchPet();
+      }, 5000);
+    }
   });
   window.addEventListener("pet:error", () => {
     generating = false;
+    bubble.classList.remove("thinking");
     hideBubble();
-    clearTimers();
-    state = "idle";
-    showFrame("idle");
-    badge.classList.add("anim-shake");
-    setTimeout(() => badge.classList.remove("anim-shake"), 500);
+    errorShakeUntil = performance.now() + 520;
+    setState("idle");
+    say("刚刚出了点问题，请稍后再试", 3000);
   });
   window.addEventListener("pet:pet", (e) => {
     const pet = e.detail && e.detail.pet;
     if (!pet) return;
-    stageUp(pet, stageIndex);
+    const previousStage = stageIndex;
     stageIndex = pet.stage_index;
+    if (Number.isFinite(pet.exp)) lastExp = pet.exp;
     renderPet(pet);
+    const gain = Number.isFinite(pet.gained) && pet.gained > 0 ? pet.gained : null;
+    growthFeedback(pet, previousStage, gain, "庭审完成");
   });
 
-  // ---- 位置：跟随 composer-dock 高度 ----
+  // ---- 位置：默认跟随 composer-dock；可拖拽移动，位置记忆在 localStorage ----
   const dock = chatArea.querySelector(".composer-dock");
+  let dragMoved = false;   // 拖拽/恢复过位置后，不再自动跟随 dock 高度
+  function clampRoot() {
+    const p = root.offsetParent;
+    if (!p) return;
+    root.style.left = `${Math.max(0, Math.min(root.offsetLeft, p.offsetWidth - root.offsetWidth))}px`;
+    root.style.top = `${Math.max(0, Math.min(root.offsetTop, p.offsetHeight - root.offsetHeight))}px`;
+  }
   if (dock && "ResizeObserver" in window) {
-    const place = () => { root.style.bottom = `${dock.offsetHeight + 12}px`; };
+    const place = () => { if (!dragMoved) root.style.bottom = `${dock.offsetHeight + 12}px`; };
     new ResizeObserver(place).observe(dock);
     place();
   }
+
+  function resetPosition() {
+    dragMoved = false;
+    root.style.removeProperty("left");
+    root.style.removeProperty("top");
+    root.style.removeProperty("right");
+    root.style.bottom = `${dock ? dock.offsetHeight + 12 : 150}px`;
+    resetButton.hidden = true;
+    try { localStorage.removeItem(POSITION_KEY); } catch { /* 仅影响持久化 */ }
+    setState("happy");
+    say("我回到原来的位置啦", 2400);
+  }
+  resetButton.addEventListener("click", resetPosition);
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(POSITION_KEY) || "null");
+    if (saved && Number.isFinite(saved.l) && Number.isFinite(saved.t)) {
+      dragMoved = true;
+      resetButton.hidden = false;
+      root.style.right = "auto";
+      root.style.bottom = "auto";
+      root.style.left = `${saved.l}px`;
+      root.style.top = `${saved.t}px`;
+      clampRoot();
+    }
+  } catch { /* 位置记忆损坏则回到默认位置 */ }
+  window.addEventListener("resize", () => { if (dragMoved) clampRoot(); });
+
+  // 拖拽：Pointer Events 统一鼠标/触摸；位移 <5px 视为点击（开面板）
+  let suppressClick = false;
+  {
+    let pressed = false, dragging = false, pressX = 0, pressY = 0, baseL = 0, baseT = 0;
+    badge.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      pressed = true;
+      dragging = false;
+      suppressClick = false;
+      pressX = e.clientX; pressY = e.clientY;
+      baseL = root.offsetLeft; baseT = root.offsetTop;
+      try { badge.setPointerCapture(e.pointerId); } catch { /* 无捕获则仅在徽章内可拖 */ }
+    });
+    badge.addEventListener("pointermove", (e) => {
+      if (!pressed) return;
+      const dx = e.clientX - pressX, dy = e.clientY - pressY;
+      if (!dragging) {
+        if (Math.hypot(dx, dy) < 5) return;
+        dragging = true; suppressClick = true; dragMoved = true;
+        resetButton.hidden = false;
+        root.style.right = "auto";
+        root.style.bottom = "auto";
+      }
+      root.style.left = `${baseL + dx}px`;
+      root.style.top = `${baseT + dy}px`;
+      clampRoot();
+      lastActivity = Date.now();
+      if (state === "sleepy") setState("idle");
+    });
+    const endDrag = () => {
+      if (dragging) {
+        try {
+          localStorage.setItem(POSITION_KEY,
+            JSON.stringify({ l: root.offsetLeft, t: root.offsetTop }));
+        } catch { /* 隐私模式等存储不可用 */ }
+      }
+      pressed = false;
+      dragging = false;
+    };
+    badge.addEventListener("pointerup", endDrag);
+    badge.addEventListener("pointercancel", endDrag);
+  }
+
+  /* ================= 3D 渲染层 ================= */
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  function buildScene(THREE) {
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        canvas, alpha: true, antialias: true,
+      });
+    } catch { return null; }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 30);
+    camera.position.set(0, 1.58, 5.0);
+    camera.lookAt(0, 1.23, 0);
+
+    scene.add(new THREE.HemisphereLight(0xfff8ee, 0xcbb9a6, 1.2));
+    const key = new THREE.DirectionalLight(0xffffff, 1.55);
+    key.position.set(2.2, 3.5, 2.5);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0xffe2b8, 0.55);
+    rim.position.set(-2.5, 1.6, -2);
+    scene.add(rim);
+
+    // 卡通三阶渐变着色
+    const grad = new THREE.DataTexture(new Uint8Array([92, 168, 236]), 3, 1, THREE.RedFormat);
+    grad.minFilter = grad.magFilter = THREE.NearestFilter;
+    grad.needsUpdate = true;
+    const toon = (hex, extra) => new THREE.MeshToonMaterial(
+      Object.assign({ color: hex, gradientMap: grad }, extra));
+    const SP = (r, seg = 20) => new THREE.SphereGeometry(r, seg, Math.max(8, Math.round(seg * 0.7)));
+    const M = (geo, mat, x, y, z) => {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      return mesh;
+    };
+
+    const furM = toon(0xf6efe2), furLightM = toon(0xfdf8ee),
+      redM = toon(0xc8281e), redDarkM = toon(0xa81c12),
+      goldM = toon(0xe2a63d), brownM = toon(0x6b4a2f),
+      darkM = toon(0x2e2014), pinkM = toon(0xf0c9b2),
+      whiteM = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+    // ---- 身体（坐姿） ----
+    const pet = new THREE.Group();
+    scene.add(pet);
+    const torso = M(SP(0.55, 28), furM, 0, 0.52, 0);
+    torso.scale.set(1, 0.94, 0.96);
+    pet.add(torso);
+    pet.add(M(SP(0.4, 24), furLightM, 0, 0.46, 0.24));           // 肚皮
+    const haunchL = M(SP(0.27), furM, -0.44, 0.3, -0.08);
+    const haunchR = haunchL.clone();
+    haunchR.position.x = 0.44;
+    pet.add(haunchL, haunchR);
+    const pawL = M(SP(0.13), furLightM, -0.22, 0.13, 0.42);
+    pawL.scale.set(1, 0.72, 1.2);
+    const pawR = pawL.clone();
+    pawR.position.x = 0.22;
+    pet.add(pawL, pawR);
+    const tail = new THREE.Group();
+    tail.position.set(0, 0.58, -0.48);
+    pet.add(tail);
+    const tailFluff = M(SP(0.15, 16), redM, 0, 0.06, -0.16);
+    tailFluff.scale.set(1, 0.9, 1.3);
+    tail.add(tailFluff);
+
+    // ---- 头（枢轴在颈部，转头自此） ----
+    const headG = new THREE.Group();
+    headG.position.set(0, 0.98, 0.02);
+    pet.add(headG);
+    headG.add(M(SP(0.6, 32), furM, 0, 0.42, 0.04));               // 颅
+    const cheekL = M(SP(0.21, 14), furM, -0.42, 0.3, 0.26);
+    const cheekR = cheekL.clone();
+    cheekR.position.x = 0.42;
+    headG.add(cheekL, cheekR);                                     // 腮绒
+    headG.add(M(SP(0.25, 18), furLightM, 0, 0.28, 0.5));          // 口鼻
+    headG.add(M(SP(0.055, 10), darkM, 0, 0.35, 0.72));            // 鼻
+
+    // 眼睛：眼球 + 高光，成组便于眨眼缩放与独立移动
+    function makeEye(sx) {
+      const g = new THREE.Group();
+      g.position.set(0.25 * sx, 0.55, 0.53);
+      g.add(M(SP(0.088, 16), darkM, 0, 0, 0));
+      g.add(M(SP(0.03, 10), whiteM, 0.028, 0.034, 0.062));
+      headG.add(g);
+      return g;
+    }
+    const eyeL = makeEye(-1), eyeR = makeEye(1);
+
+    // 金色螺旋独角：沿螺旋线排布渐大球体
+    class Spiral extends THREE.Curve {
+      getPoint(t, v) {
+        const a = t * Math.PI * 5.2;
+        const r = 0.028 + t * 0.1;
+        return (v || new THREE.Vector3()).set(Math.cos(a) * r, t * 0.58, Math.sin(a) * r);
+      }
+    }
+    const HORN_N = 30;
+    const horn = new THREE.InstancedMesh(SP(0.05, 10), goldM, HORN_N);
+    const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(),
+      sv = new THREE.Vector3(), pv = new THREE.Vector3();
+    for (let i = 0; i < HORN_N; i++) {
+      const t = i / (HORN_N - 1);
+      new Spiral().getPoint(t, pv);
+      sv.setScalar(0.34 + t * 0.78);
+      m4.compose(pv, q0, sv);
+      horn.setMatrixAt(i, m4);
+    }
+    horn.position.set(0, 0.95, 0.26);
+    horn.rotation.x = -0.12;
+    headG.add(horn);
+
+    // 棕色侧弯角
+    function sideHorn(sx) {
+      const pts = [
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0.05 * sx, 0.12, -0.05),
+        new THREE.Vector3(0.03 * sx, 0.27, -0.2),
+      ];
+      const tube = new THREE.Mesh(
+        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 0.04, 7), brownM);
+      tube.position.set(0.52 * sx, 0.56, -0.06);
+      tube.rotation.z = -0.5 * sx;
+      headG.add(tube);
+      return tube;
+    }
+    sideHorn(-1);
+    sideHorn(1);
+
+    // 耳朵（次级摆动）
+    function makeEar(sx) {
+      const g = new THREE.Group();
+      g.position.set(0.38 * sx, 0.92, 0.02);
+      const outer = M(SP(0.12, 12), furM, 0, 0.1, 0);
+      outer.scale.set(0.7, 1.4, 0.45);
+      const inner = M(SP(0.07, 10), pinkM, 0, 0.1, 0.05);
+      inner.scale.set(0.5, 1.15, 0.28);
+      g.add(outer, inner);
+      g.rotation.z = -0.55 * sx;
+      headG.add(g);
+      return g;
+    }
+    const earL = makeEar(-1), earR = makeEar(1);
+
+    // 红色鬃毛围领：环 + 一圈绒球，双色交替
+    const mane = new THREE.Group();
+    mane.position.set(0, 0.04, 0);
+    headG.add(mane);
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.16, 10, 26), redM);
+    collar.rotation.x = Math.PI / 2 - 0.12;
+    collar.scale.set(1.04, 1, 0.96);
+    mane.add(collar);
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + 0.26;
+      const fluff = M(SP(0.17 + (i % 3) * 0.03, 12), i % 2 ? redDarkM : redM,
+        Math.cos(a) * 0.52, Math.sin(a * 2) * 0.07, Math.sin(a) * 0.5);
+      fluff.scale.set(1, 0.95, 0.85);
+      mane.add(fluff);
+    }
+
+    return {
+      THREE, renderer, scene, camera,
+      pet, torso, headG, eyeL, eyeR, tail, earL, earR, horn, mane,
+      earBaseL: earL.rotation.z, earBaseR: earR.rotation.z,
+    };
+  }
+
+  function applyStageAppearance(P, index) {
+    const level = clamp(Number.isFinite(index) ? index : 0, 0, 5);
+    const bodyScale = 0.94 + level * 0.018;
+    P.pet.scale.setScalar(bodyScale);
+    P.horn.scale.setScalar(0.78 + level * 0.085);
+    P.mane.scale.setScalar(0.92 + level * 0.025);
+  }
+
+  let petScene = null;
+  let threeLoadPromise = null;
+  let loopRunning = false;
+  let idleLoadHandle = 0;
+  let idleLoadKind = "";
+
+  function startLoop(P) {
+    if (loopRunning) return;
+    loopRunning = true;
+    let headYaw = 0, headPitch = 0, headRoll = 0;
+    let last = performance.now();
+    let lastFrameAt = 0;
+    let nextBlinkAt = performance.now() + 2800;
+    let blinkUntil = 0;
+
+    function frame(now) {
+      if (!loopRunning) return;
+      if (document.hidden || root.style.display === "none" || !canvas.clientWidth) {
+        loopRunning = false;
+        return;
+      }
+      requestAnimationFrame(frame);
+      const frameInterval = reduceMotion ? 100 : 1000 / 30;
+      if (now - lastFrameAt < frameInterval) return;
+      lastFrameAt = now;
+      const t = now / 1000;
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+
+      // 各部位目标
+      let ty = 0, tp = 0, tr = 0;       // 头 yaw/pitch/roll
+      let ex = 0, ey = 0;               // 眼球偏移
+      let breatheAmp = 0.018, breatheSpeed = 1.7;
+      let wagSpeed = 2 + stageIndex * 0.22, earFlap = 0.05, hopH = 0, squint = 1;
+
+      if (state === "sleepy") {
+        tp = 0.5; squint = 0.06;
+        breatheAmp = 0.032; breatheSpeed = 0.75; wagSpeed = 0;
+      } else {
+        if (Math.hypot(look.x, look.y) > 0.05) {
+          ty = clamp(look.x * 1.9, -0.68, 0.68);
+          tp = clamp(look.y * 1.1, -0.26, 0.34);
+        }
+        // 眼球先行：比头多转一点，产生「细节在动」的层次
+        ex = clamp(look.x * 2.1, -1, 1) * 0.065;
+        ey = clamp(-look.y * 1.7, -1, 1) * 0.032;
+
+        if (state === "typing") {
+          if (!reduceMotion) {
+            ty += Math.sin(t * 8.5) * 0.16;
+            ex += Math.sin(t * 8.5 + 1.2) * 0.022;
+          }
+          earFlap = 0.14;
+        } else if (state === "thinking") {
+          tp += 0.24;
+          ex = -0.032; ey = 0.028;
+          tr = reduceMotion ? 0.12 : 0.12 + Math.sin(t * 1.3) * 0.05;
+          wagSpeed = 0.7;
+        } else if (state === "happy") {
+          const since = (now - stateEnteredAt) / 1000;
+          if (!reduceMotion) {
+            hopH = Math.abs(Math.sin(since * Math.PI * 2.6)) * 0.2 * Math.max(0, 1 - since / 1.4);
+          }
+          earFlap = 0.3; wagSpeed = 7; ey = 0.02;
+        }
+        if (now < errorShakeUntil && !reduceMotion) ty += Math.sin(t * 34) * 0.26;
+      }
+
+      // 平滑趋近（帧率无关阻尼；reduced-motion 直接到位）
+      const k = reduceMotion ? 1 : 1 - Math.pow(0.002, dt);
+      headYaw += (ty - headYaw) * k;
+      headPitch += (tp - headPitch) * k;
+      headRoll += (tr - headRoll) * k;
+      P.headG.rotation.set(headPitch, headYaw, headRoll, "YXZ");
+
+      // 眼球位移 + 眨眼
+      P.eyeL.position.set(-0.25 + ex, 0.55 + ey, 0.53);
+      P.eyeR.position.set(0.25 + ex, 0.55 + ey, 0.53);
+      let blink = squint;
+      if (!reduceMotion && state !== "sleepy") {
+        if (now > nextBlinkAt) {
+          blinkUntil = now + 150;
+          nextBlinkAt = now + 2400 + Math.random() * 2600;
+        }
+        if (now < blinkUntil) blink = 0.06;
+      }
+      P.eyeL.scale.y = P.eyeR.scale.y = blink;
+
+      // 呼吸 / 弹跳 / 尾巴 / 耳朵
+      const br = reduceMotion ? 0 : Math.sin(t * Math.PI * breatheSpeed) * breatheAmp;
+      P.torso.scale.set(1 + br * 0.6, 0.94 - br, 0.96 + br * 0.6);
+      P.pet.position.y = hopH;
+      P.tail.rotation.y = !reduceMotion && wagSpeed ? Math.sin(t * wagSpeed * 2.4) * 0.5 : 0;
+      const flap = reduceMotion ? 0 : Math.sin(t * 3.1) * earFlap;
+      P.earL.rotation.z = P.earBaseL + flap;
+      P.earR.rotation.z = P.earBaseR - flap;
+
+      P.renderer.render(P.scene, P.camera);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function cancelScheduled3D() {
+    if (!idleLoadHandle) return;
+    if (idleLoadKind === "idle" && "cancelIdleCallback" in window) {
+      window.cancelIdleCallback(idleLoadHandle);
+    } else {
+      clearTimeout(idleLoadHandle);
+    }
+    idleLoadHandle = 0;
+    idleLoadKind = "";
+  }
+
+  function schedule3D() {
+    if (idleLoadHandle || petScene || threeLoadPromise || root.style.display === "none") return;
+    const load = () => {
+      idleLoadHandle = 0;
+      idleLoadKind = "";
+      ensure3D();
+    };
+    if ("requestIdleCallback" in window) {
+      idleLoadKind = "idle";
+      idleLoadHandle = window.requestIdleCallback(load, { timeout: 1400 });
+    } else {
+      idleLoadKind = "timeout";
+      idleLoadHandle = setTimeout(load, 500);
+    }
+  }
+
+  // 仅在宠物可见时加载 Three.js；隐藏偏好不再支付下载和 WebGL 初始化成本。
+  function ensure3D() {
+    cancelScheduled3D();
+    if (root.style.display === "none") return Promise.resolve(null);
+    if (petScene) {
+      startLoop(petScene);
+      return Promise.resolve(petScene);
+    }
+    if (threeLoadPromise) return threeLoadPromise;
+    threeLoadPromise = import(`${API_BASE}/assets/vendor/three.module.min.js?v=0186c`)
+      .then((m) => {
+        const P = buildScene(m);
+        if (!P) {
+          threeLoadPromise = null;
+          return null;
+        }
+        petScene = P;
+        applyStageAppearance(P, stageIndex);
+        badge.classList.remove("pet-fallback");
+        const place = () => {
+          const w = badge.clientWidth || 96, h = badge.clientHeight || 96;
+          P.renderer.setSize(w, h, false);
+          P.camera.aspect = w / h;
+          P.camera.updateProjectionMatrix();
+        };
+        if ("ResizeObserver" in window) new ResizeObserver(place).observe(badge);
+        place();
+        startLoop(P);
+        return P;
+      })
+      .catch(() => {
+        threeLoadPromise = null;
+        return null;
+      }); // 保持静态 sprite 回退，下一次显式交互允许重试
+    return threeLoadPromise;
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) loopRunning = false;
+    else if (petScene && root.style.display !== "none") startLoop(petScene);
+    else if (root.style.display !== "none") schedule3D();
+  });
+
+  canvas.addEventListener("webglcontextlost", (event) => {
+    event.preventDefault();
+    loopRunning = false;
+    badge.classList.add("pet-fallback");
+  });
+  canvas.addEventListener("webglcontextrestored", () => {
+    if (!petScene || root.style.display === "none") return;
+    badge.classList.remove("pet-fallback");
+    startLoop(petScene);
+  });
+
+  badge.addEventListener("pointerenter", ensure3D);
+  badge.addEventListener("focus", ensure3D);
+  if (!initiallyHidden) schedule3D();
 })();

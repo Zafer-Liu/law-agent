@@ -672,6 +672,20 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .setting-toggle input:checked + .setting-track::after { transform: translateX(18px); }
 .setting-toggle input:disabled + .setting-track { opacity: .45; }
 .setting-toggle input:focus-visible + .setting-track { outline: 3px solid var(--focus); outline-offset: 2px; }
+.settings-danger-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.settings-danger-btn:hover { background: var(--primary-light); border-color: #dfa49e; }
 .settings-log {
   max-height: 340px; overflow-y: auto; padding: 10px 12px;
   background: #faf7f4; border: 1px solid var(--border); border-radius: 10px;

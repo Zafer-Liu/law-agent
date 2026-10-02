@@ -3,14 +3,16 @@
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import sqlite3
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from itertools import zip_longest
 from pathlib import Path
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 
 from flask import (
     Flask,
@@ -92,6 +94,100 @@ RETIRED_SEED_TITLES = {
 
 def sse(payload: dict) -> str:
     return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+# ------------------------------------------------------------------
+# 獬豸记忆库：把每次问答蒸馏成一条宠物记忆（模型生成，失败退回问题摘要）
+# ------------------------------------------------------------------
+PET_MEMORY_LIMIT = 50      # 每个客户端保留的记忆条数上限，超出裁掉最旧
+PET_MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pet-memory")
+PET_MEMORY_SLOTS = BoundedSemaphore(8)  # 2 个执行 + 最多 6 个排队，过载时宁可跳过附加体验
+PET_MEMORY_PROMPT = (
+    "你是法律助手「法晓」的桌宠獬豸。根据下面这次法律问答，为獬豸提炼一条关于这位用户的记忆。"
+    "要求：第三人称；不超过 40 字；只记关键事实或关切（纠纷类型、身份角色、核心诉求）；"
+    "不要建议、不要法条编号、不要引号和任何前后缀，直接输出记忆内容。"
+)
+
+
+def pet_memory_content(question: str, answer: str, complete) -> str:
+    """用模型蒸馏一条记忆；complete 抛错或输出为空时退回问题摘要（≤60 字）。"""
+    content = ""
+    try:
+        content = complete(
+            [{"role": "system", "content": PET_MEMORY_PROMPT},
+             {"role": "user", "content": f"问题：{question[:400]}\n回答：{answer[:1200]}"}],
+            temperature=0.2, max_tokens=800)
+    except Exception:  # noqa: BLE001 — 记忆是附加体验，模型故障不阻断问答
+        content = ""
+    content = str(content).strip().strip('"“”‘’').replace("\n", " ")[:60]
+    return content or f"曾就「{question[:30]}」咨询法律问题"[:60]
+
+
+def load_pet_memories(db, client_id: str, limit: int = 5) -> dict:
+    """最近的记忆（新的在前）+ 总条数，随 /api/pet 一起下发。"""
+    rows = db.execute(
+        "SELECT id,content,created_at FROM pet_memories WHERE client_id=?"
+        " ORDER BY id DESC LIMIT ?", (client_id, limit)).fetchall()
+    total = db.execute("SELECT COUNT(*) AS n FROM pet_memories WHERE client_id=?",
+                       (client_id,)).fetchone()["n"]
+    return {"memories": [dict(row) for row in rows], "memory_count": total}
+
+
+def load_pet_rewards(db, client_id: str, limit: int = 5) -> list[dict]:
+    """最近成长记录，用于解释经验来源；不向前端暴露内部事件标识。"""
+    rows = db.execute(
+        "SELECT kind,gain,created_at FROM pet_reward_events WHERE client_id=?"
+        " ORDER BY created_at DESC LIMIT ?", (client_id, limit)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def pet_forget_old(db, client_id: str) -> None:
+    """每客户端只留最近 PET_MEMORY_LIMIT 条记忆。"""
+    db.execute(
+        "DELETE FROM pet_memories WHERE client_id=? AND id NOT IN"
+        " (SELECT id FROM pet_memories WHERE client_id=?"
+        f"  ORDER BY id DESC LIMIT {PET_MEMORY_LIMIT})",
+        (client_id, client_id))
+
+
+def apply_pet_reward(db, client_id: str, kind: str,
+                     gain: int, event_id: str) -> bool:
+    """在一个事务内登记奖励事件并累加进度；返回本次是否首次发放。"""
+    if kind not in ("qa", "court") or gain <= 0 or not event_id:
+        return False
+    created_at = now_iso()
+    inserted = db.execute(
+        "INSERT OR IGNORE INTO pet_reward_events"
+        " (event_id,client_id,kind,gain,created_at) VALUES (?,?,?,?,?)",
+        (event_id, client_id, kind, gain, created_at)).rowcount == 1
+    if not inserted:
+        return False
+    counter = "qa_count" if kind == "qa" else "court_count"
+    db.execute(
+        "INSERT INTO pet_progress (client_id,exp,qa_count,court_count,updated_at)"
+        " VALUES (?,?,?,?,?)"
+        " ON CONFLICT(client_id) DO UPDATE SET"
+        " exp=pet_progress.exp+excluded.exp,"
+        f" {counter}=pet_progress.{counter}+1,"
+        " updated_at=excluded.updated_at",
+        (client_id, gain, kind == "qa", kind == "court", created_at))
+    return True
+
+
+def submit_pet_memory(work) -> bool:
+    """把附加记忆任务送入有界线程池；过载时不拖垮主问答链路。"""
+    if not PET_MEMORY_SLOTS.acquire(blocking=False):
+        LOG.warning("獬豸记忆队列已满，跳过本次记忆")
+        return False
+    try:
+        future = PET_MEMORY_EXECUTOR.submit(work)
+    except RuntimeError:
+        PET_MEMORY_SLOTS.release()
+        LOG.warning("獬豸记忆任务无法提交", exc_info=True)
+        return False
+    future.add_done_callback(lambda _future: PET_MEMORY_SLOTS.release())
+    return True
+
 
 
 def text_value(data: dict, key: str, *, limit: int | None = None) -> str:
@@ -200,6 +296,9 @@ def seed_sources(database: Database, embedder: EmbeddingClient):
 def create_app() -> Flask:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # Windows 注册表可能把 .js 注册成 text/plain；模块脚本按规范严格校验 MIME，必须纠正
+    mimetypes.add_type("text/javascript", ".js")
+    mimetypes.add_type("text/javascript", ".mjs")
     app = Flask(__name__, static_folder=None)
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
@@ -380,24 +479,38 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     def client_identity(data) -> str:
         client_id = text_value(data, "client_id", limit=128)
-        if len(client_id) < 8:
+        if len(client_id) < 8 or not re.fullmatch(r"[A-Za-z0-9._:-]+", client_id):
             abort(400, "缺少有效的客户端标识")
         return client_id
+
+    def request_identity(data) -> str:
+        request_id = text_value(data, "request_id", limit=128)
+        if not request_id:
+            return new_id()
+        if len(request_id) < 8 or not re.fullmatch(r"[A-Za-z0-9._:-]+", request_id):
+            abort(400, "请求标识格式无效")
+        return request_id
 
     # ------------------------------------------------------------------
     # 獬豸桌宠：成长进度（按完成问答/庭审次数积累）
     # ------------------------------------------------------------------
     PET_STAGES = (
-        {"key": "cub", "name": "幼獬", "need": 0, "title": "初识人间，蹒跚学步"},
-        {"key": "dawn", "name": "启蒙", "need": 30, "title": "开始辨认是非曲直"},
-        {"key": "keen", "name": "明辨", "need": 100, "title": "目光如炬，善恶分明"},
-        {"key": "just", "name": "执正", "need": 250, "title": "以角触不直，仗义执言"},
-        {"key": "sage", "name": "神判", "need": 500, "title": "明察秋毫，公正无私"},
-        {"key": "luck", "name": "祥瑞", "need": 1000, "title": "德刑昭明，天下大安"},
+        {"key": "cub", "name": "幼獬", "need": 0, "title": "初识人间，蹒跚学步",
+         "appearance": "幼角初生，浅色鬃毛"},
+        {"key": "dawn", "name": "启蒙", "need": 30, "title": "开始辨认是非曲直",
+         "appearance": "独角渐长，步态更轻快"},
+        {"key": "keen", "name": "明辨", "need": 100, "title": "目光如炬，善恶分明",
+         "appearance": "额角更挺拔，目光更灵动"},
+        {"key": "just", "name": "执正", "need": 250, "title": "以角触不直，仗义执言",
+         "appearance": "周身显现金色轮廓"},
+        {"key": "sage", "name": "神判", "need": 500, "title": "明察秋毫，公正无私",
+         "appearance": "鬃毛更丰盛，金辉更明亮"},
+        {"key": "luck", "name": "祥瑞", "need": 1000, "title": "德刑昭明，天下大安",
+         "appearance": "祥瑞金辉环绕全身"},
     )
     PET_GAINS = {"qa": 2, "court": 10}
 
-    def pet_state(row) -> dict:
+    def pet_state(row, client_id: str = "") -> dict:
         exp = row["exp"] if row else 0
         index = 0
         for i, stage in enumerate(PET_STAGES):
@@ -406,37 +519,56 @@ def create_app() -> Flask:
         stage, nxt = PET_STAGES[index], (PET_STAGES[index + 1]
                                          if index + 1 < len(PET_STAGES) else None)
         span = (nxt["need"] - stage["need"]) if nxt else 1
-        return {
+        state = {
             "exp": exp,
             "qa_count": row["qa_count"] if row else 0,
             "court_count": row["court_count"] if row else 0,
             "stage": stage["key"], "stage_index": index,
             "stage_name": stage["name"], "stage_title": stage["title"],
+            "stage_appearance": stage["appearance"],
             "next_stage_name": nxt["name"] if nxt else "",
             "next_need": max(nxt["need"] - exp, 0) if nxt else 0,
             "progress": min(int((exp - stage["need"]) * 100 / span), 100),
             "stages": [{"key": s["key"], "name": s["name"], "need": s["need"]}
                        for s in PET_STAGES],
         }
+        if client_id:
+            with database.connect() as db:
+                state.update(load_pet_memories(db, client_id))
+                state["recent_rewards"] = load_pet_rewards(db, client_id)
+        return state
 
-    def pet_tick(client_id: str, kind: str) -> dict:
-        """问答或庭审完成时累加经验；仅在完成事件处调用，天然幂等。"""
+    def pet_tick(client_id: str, kind: str, event_id: str) -> dict:
+        """按唯一业务事件累加经验；同一回答或庭审重试不会重复奖励。"""
         gain = PET_GAINS.get(kind)
-        if not gain:
-            return pet_state(None)
-        counter = "qa_count" if kind == "qa" else "court_count"
+        if not gain or not event_id:
+            state = pet_state(None, client_id)
+            state["gained"] = 0
+            return state
         with database.connect() as db:
-            db.execute(
-                "INSERT INTO pet_progress (client_id,exp,qa_count,court_count,updated_at)"
-                " VALUES (?,?,?,?,?)"
-                " ON CONFLICT(client_id) DO UPDATE SET"
-                " exp=pet_progress.exp+excluded.exp,"
-                f" {counter}=pet_progress.{counter}+1,"
-                " updated_at=excluded.updated_at",
-                (client_id, gain, kind == "qa", kind == "court", now_iso()))
+            inserted = apply_pet_reward(db, client_id, kind, gain, event_id)
             row = db.execute("SELECT * FROM pet_progress WHERE client_id=?",
                              (client_id,)).fetchone()
-        return pet_state(row)
+        state = pet_state(row, client_id)
+        state["gained"] = gain if inserted else 0
+        return state
+
+    def pet_remember(client_id: str, event_id: str,
+                     question: str, answer: str) -> bool:
+        """用户主动开启后异步蒸馏记忆；有界队列不阻塞主问答链路。"""
+        def work():
+            content = pet_memory_content(question, answer, qa_llm.complete)
+            try:
+                with database.connect() as db:
+                    inserted = db.execute(
+                        "INSERT OR IGNORE INTO pet_memories"
+                        " (client_id,content,source_event_id,created_at) VALUES (?,?,?,?)",
+                        (client_id, content, event_id, now_iso())).rowcount == 1
+                    if inserted:
+                        pet_forget_old(db, client_id)
+            except sqlite3.Error:
+                LOG.warning("獬豸记忆写入失败", exc_info=True)
+        return submit_pet_memory(work)
 
     @app.get("/api/pet")
     def pet_progress_api():
@@ -444,7 +576,26 @@ def create_app() -> Flask:
         with database.connect() as db:
             row = db.execute("SELECT * FROM pet_progress WHERE client_id=?",
                              (client_id,)).fetchone()
-        return jsonify(pet_state(row))
+        return jsonify(pet_state(row, client_id))
+
+    @app.delete("/api/pet/memories")
+    def pet_memories_delete_api():
+        data = request.get_json(force=True, silent=True) or {}
+        client_id = client_identity(data)
+        with database.connect() as db:
+            deleted = db.execute("DELETE FROM pet_memories WHERE client_id=?",
+                                 (client_id,)).rowcount
+        return jsonify({"deleted": deleted})
+
+    @app.delete("/api/pet/memories/<int:memory_id>")
+    def pet_memory_delete_api(memory_id: int):
+        data = request.get_json(force=True, silent=True) or {}
+        client_id = client_identity(data)
+        with database.connect() as db:
+            deleted = db.execute(
+                "DELETE FROM pet_memories WHERE id=? AND client_id=?",
+                (memory_id, client_id)).rowcount
+        return jsonify({"deleted": deleted})
 
     @app.get("/api/conversations")
     def conversation_list():
@@ -481,7 +632,9 @@ def create_app() -> Flask:
         data = request.get_json(force=True, silent=True) or {}
         question = text_value(data, "question", limit=MAX_QUESTION)
         conversation_id = text_value(data, "conversation_id", limit=128)
+        request_id = request_identity(data)
         client_id = client_identity(data)
+        remember_pet = data.get("remember") is True
         if not 2 <= len(question) <= MAX_QUESTION:
             abort(400, "问题长度需在 2-2000 字之间")
         if not qa_llm.configured:
@@ -525,14 +678,14 @@ def create_app() -> Flask:
                            "conversation_id": conversation_id,
                            "backend": retrieval["backend"]}
                 with database.connect() as db:
+                    user_message_id, assistant_message_id = new_id(), new_id()
                     db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
                                " VALUES (?,?,?,?,?,?)",
-                               (new_id(), conversation_id, "user", question, "{}", now_iso()))
+                               (user_message_id, conversation_id, "user", question, "{}", now_iso()))
                     db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
                                " VALUES (?,?,?,?,?,?)",
-                               (new_id(), conversation_id, "assistant", payload["content"],
+                               (assistant_message_id, conversation_id, "assistant", payload["content"],
                                 json.dumps({"grounded": False}), now_iso()))
-                payload["pet"] = pet_tick(client_id, "qa")
                 yield sse({"type": "result", **payload})
                 return
             evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
@@ -557,18 +710,25 @@ def create_app() -> Flask:
             elif not result["used"]:
                 notice = "本次回答未携带引用标注，请注意核对原文。" + notice
             with database.connect() as db:
+                user_message_id, assistant_message_id = new_id(), new_id()
                 db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
                            " VALUES (?,?,?,?,?,?)",
-                           (new_id(), conversation_id, "user", question, "{}", now_iso()))
+                           (user_message_id, conversation_id, "user", question, "{}", now_iso()))
                 db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
                            " VALUES (?,?,?,?,?,?)",
-                           (new_id(), conversation_id, "assistant", result["content"],
+                           (assistant_message_id, conversation_id, "assistant", result["content"],
                             json.dumps({"citations": citations,
                                         "backend": backend,
                                         "grounded": bool(result["used"]),
                                         "notice": notice}, ensure_ascii=False),
                             now_iso()))
-            pet = pet_tick(client_id, "qa")
+            pet = None
+            if result["used"]:
+                reward_event_id = f"qa:{request_id}"
+                pet = pet_tick(client_id, "qa", reward_event_id)
+                if remember_pet and pet["gained"]:
+                    pet_remember(client_id, reward_event_id,
+                                 question, result["content"])
             yield sse({"type": "result", "content": result["content"], "citations": citations,
                        "grounded": bool(result["used"]), "notice": notice,
                        "backend": backend, "conversation_id": conversation_id, "pet": pet})
@@ -761,8 +921,8 @@ def create_app() -> Flask:
                            (json.dumps(deliberation, ensure_ascii=False), analysis,
                             now_iso(), session_id))
             pet = None
-            if len(pet_client) >= 8:
-                pet = pet_tick(pet_client, "court")
+            if len(pet_client) >= 8 and re.fullmatch(r"[A-Za-z0-9._:-]+", pet_client):
+                pet = pet_tick(pet_client, "court", f"court:{session_id}")
             if pet:
                 yield sse({"type": "pet", "pet": pet})
 

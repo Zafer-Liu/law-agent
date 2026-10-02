@@ -139,11 +139,13 @@
 {
   "question": "合同违约后可以要求什么？",
   "client_id": "浏览器生成的至少 8 字符标识",
-  "conversation_id": "可选；继续既有会话"
+  "conversation_id": "可选；继续既有会话",
+  "request_id": "客户端为本次提交生成的 UUID",
+  "remember": false
 }
 ```
 
-限制：`question` 为 2–2000 字。不存在或不属于当前 `client_id` 的 `conversation_id` 会被忽略并创建新会话。
+限制：`question` 为 2–2000 字。不存在或不属于当前 `client_id` 的 `conversation_id` 会被忽略并创建新会话。只有 `remember` 严格为 `true` 且回答带有有效法律依据时，才会异步生成一条宠物咨询记忆。
 
 典型事件：
 
@@ -184,6 +186,26 @@ data: {"type":"result", ...}
 ```json
 {"type":"error","error":"模型请求失败或超时。"}
 ```
+
+### `GET /api/pet?client_id=...`
+
+返回该浏览器标识下的獬豸阶段、外观变化、经验、问答/庭审次数、最近 5 条成长记录，以及最近 5 条咨询记忆。`client_id` 采用与对话接口相同的匿名浏览器标识。
+
+问答奖励为 2 经验，完成庭审为 10 经验。奖励按 `request_id` 或庭审会话的唯一事件 ID 去重；使用同一 `request_id` 重试不会重复加经验。无有效依据的兜底回答不奖励经验，也不生成记忆。
+
+### `DELETE /api/pet/memories`
+
+清空当前匿名浏览器标识下的全部咨询记忆：
+
+```json
+{"client_id":"浏览器生成的至少 8 字符标识"}
+```
+
+成功返回删除数量：`{"deleted": 3}`。关闭前端的咨询记忆开关只会停止生成新记忆，不会自动删除已有内容。
+
+### `DELETE /api/pet/memories/{memory_id}`
+
+删除一条属于当前匿名浏览器标识的咨询记忆，请求体仍为 `{"client_id":"..."}`。无法删除其他浏览器标识下的记录；未找到时返回 `{"deleted": 0}`。
 
 ## 5. 模拟法庭案例接口
 

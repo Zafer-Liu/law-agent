@@ -51,6 +51,7 @@
   let conversations = [];
   let activeCitations = [];
   const clientId = getClientId();
+  const PET_MEMORY_KEY = "faxiao_pet_memory_enabled";
 
   function getClientId() {
     const key = "faxiao_client_id";
@@ -66,6 +67,10 @@
     } catch {
       return `browser-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     }
+  }
+
+  function petMemoryEnabled() {
+    try { return localStorage.getItem(PET_MEMORY_KEY) === "1"; } catch { return false; }
   }
 
   input.addEventListener("input", () => {
@@ -158,13 +163,22 @@
     stream.status("正在查找相关法律…");
     clearCitations();
     let resultEvent = null;
+    const requestId = crypto.randomUUID
+      ? crypto.randomUUID()
+      : `ask-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     window.dispatchEvent(new CustomEvent("pet:ask"));
 
     try {
       const res = await fetch(API_BASE + "/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, conversation_id: conversationId, client_id: clientId }),
+        body: JSON.stringify({
+          question,
+          conversation_id: conversationId,
+          client_id: clientId,
+          request_id: requestId,
+          remember: petMemoryEnabled(),
+        }),
       });
 
       if (!res.ok) {
@@ -895,6 +909,89 @@
     notice.className = "settings-hint";
     notice.textContent = text;
     return notice;
+  }
+
+  // ---- 桌宠偏好：显示开关 + 独立的记忆授权 ----
+  const settingsPet = document.getElementById("settings-pet");
+  if (settingsPet) {
+    let petVisible = true;
+    try { petVisible = localStorage.getItem("faxiao_pet_hidden") !== "1"; } catch { /* 存储不可用按可见处理 */ }
+    const makeToggleRow = (titleText, descText, checked, label) => {
+      const row = document.createElement("div");
+      row.className = "setting-row";
+      const info = document.createElement("div");
+      info.className = "setting-info";
+      const title = document.createElement("strong");
+      title.textContent = titleText;
+      const desc = document.createElement("small");
+      desc.textContent = descText;
+      info.append(title, desc);
+      const toggleLabel = document.createElement("label");
+      toggleLabel.className = "setting-toggle";
+      const toggle = document.createElement("input");
+      toggle.type = "checkbox";
+      toggle.checked = checked;
+      toggle.setAttribute("aria-label", label);
+      const track = document.createElement("span");
+      track.className = "setting-track";
+      track.setAttribute("aria-hidden", "true");
+      toggleLabel.append(toggle, track);
+      row.append(info, toggleLabel);
+      return { row, toggle };
+    };
+
+    const visibleSetting = makeToggleRow(
+      "獬豸桌宠", "3D 獬豸陪伴问答 · 眼随鼠标 · 可拖拽移动",
+      petVisible, "獬豸桌宠开关");
+    visibleSetting.toggle.addEventListener("change", () => {
+      // pet.js 负责实际显隐与 localStorage 持久化，这里只发事件 + 提示
+      window.dispatchEvent(new CustomEvent("pet:visibility", {
+        detail: { visible: visibleSetting.toggle.checked },
+      }));
+      window.toast(`獬豸桌宠已${visibleSetting.toggle.checked ? "开启" : "隐藏"}`);
+    });
+    // 宠物可能通过面板里的「隐藏宠物」按钮隐藏（或事件来自其它入口），保持开关同步
+    const syncPetToggle = () => {
+      try { visibleSetting.toggle.checked = localStorage.getItem("faxiao_pet_hidden") !== "1"; } catch { /* 存储不可用按可见处理 */ }
+    };
+    window.addEventListener("pet:visibility", (e) => {
+      visibleSetting.toggle.checked = !(e.detail && e.detail.visible === false);
+    });
+    settingsButton.addEventListener("click", syncPetToggle);
+
+    const memorySetting = makeToggleRow(
+      "咨询记忆", "主动开启后，才会把有依据的问答提炼为最多 50 条摘要",
+      petMemoryEnabled(), "允许獬豸记录咨询摘要");
+    memorySetting.toggle.addEventListener("change", () => {
+      try {
+        if (memorySetting.toggle.checked) localStorage.setItem(PET_MEMORY_KEY, "1");
+        else localStorage.removeItem(PET_MEMORY_KEY);
+      } catch { /* 存储不可用则本次偏好不持久化 */ }
+      window.dispatchEvent(new CustomEvent("pet:memory-preference", {
+        detail: { enabled: memorySetting.toggle.checked },
+      }));
+      window.toast(`咨询记忆已${memorySetting.toggle.checked ? "开启" : "关闭"}`);
+    });
+
+    const clearRow = document.createElement("div");
+    clearRow.className = "setting-row pet-memory-clear-row";
+    const clearInfo = document.createElement("div");
+    clearInfo.className = "setting-info";
+    const clearTitle = document.createElement("strong");
+    clearTitle.textContent = "已保存的记忆";
+    const clearDesc = document.createElement("small");
+    clearDesc.textContent = "关闭记录不会自动删除已有内容，可随时全部清空";
+    clearInfo.append(clearTitle, clearDesc);
+    const clearButton = document.createElement("button");
+    clearButton.className = "settings-danger-btn";
+    clearButton.type = "button";
+    clearButton.textContent = "全部清空";
+    clearButton.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("pet:clear-memories"));
+    });
+    clearRow.append(clearInfo, clearButton);
+
+    settingsPet.replaceChildren(visibleSetting.row, memorySetting.row, clearRow);
   }
 
   settingsButton.addEventListener("click", () =>
