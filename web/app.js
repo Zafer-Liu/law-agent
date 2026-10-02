@@ -102,21 +102,42 @@
 
   conversationList.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
+    const confirmButton = event.target.closest(".conversation-confirm-btn");
+    if (confirmButton) {
+      if (sending) return window.toast("回答生成中，请稍候再删除对话");
+      deleteConversation(
+        confirmButton.dataset.conversationId,
+        confirmButton.dataset.conversationTitle,
+        confirmButton,
+      );
+      return;
+    }
     const deleteButton = event.target.closest(".conversation-delete-btn");
     if (deleteButton) {
       if (sending) return window.toast("回答生成中，请稍候再删除对话");
-      deleteConversation(
-        deleteButton.dataset.conversationId,
-        deleteButton.dataset.conversationTitle,
-        deleteButton,
-      );
+      // 原位确认：本行变红，删除按钮切换为「确认删除」
+      clearConversationConfirmStates(deleteButton.closest(".conversation-item"));
+      const row = deleteButton.closest(".conversation-item");
+      row?.classList.add("confirm-delete");
+      deleteButton.hidden = true;
+      row.querySelector(".conversation-confirm-btn").hidden = false;
       return;
     }
     const openButton = event.target.closest(".conversation-item-open");
     if (!openButton) return;
     if (sending) return window.toast("回答生成中，请稍候再切换对话");
+    clearConversationConfirmStates();
     loadConversation(openButton.dataset.conversationId);
   });
+
+  function clearConversationConfirmStates(exceptRow = null) {
+    conversationList.querySelectorAll(".conversation-item.confirm-delete").forEach((row) => {
+      if (row === exceptRow) return;
+      row.classList.remove("confirm-delete");
+      row.querySelector(".conversation-confirm-btn")?.setAttribute("hidden", "");
+      row.querySelector(".conversation-delete-btn")?.removeAttribute("hidden");
+    });
+  }
 
   citationsToggle.addEventListener("click", () => {
     const open = !citationsRail.classList.contains("open");
@@ -328,7 +349,15 @@
       deleteButton.title = "删除对话";
       deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.75h6V7m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>';
 
-      row.append(openButton, deleteButton);
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button";
+      confirmButton.className = "conversation-confirm-btn";
+      confirmButton.dataset.conversationId = item.id;
+      confirmButton.dataset.conversationTitle = item.title;
+      confirmButton.hidden = true;
+      confirmButton.textContent = "确认删除";
+
+      row.append(openButton, deleteButton, confirmButton);
       conversationList.appendChild(row);
     });
     conversationTotal.textContent = conversations.length ? String(conversations.length) : "";
@@ -348,18 +377,22 @@
 
   async function deleteConversation(id, title, button) {
     if (!id || button.disabled) return;
-    const displayTitle = title || "这条对话";
-    if (!window.confirm(`确定删除“${displayTitle}”吗？删除后无法恢复。`)) return;
-
     button.disabled = true;
-    button.closest(".conversation-item")?.setAttribute("aria-busy", "true");
+    const row = button.closest(".conversation-item");
+    row?.setAttribute("aria-busy", "true");
+    const resetConfirm = () => {
+      button.disabled = false;
+      row?.removeAttribute("aria-busy");
+      row?.classList.remove("confirm-delete");
+      row?.querySelector(".conversation-delete-btn")?.removeAttribute("hidden");
+      button.setAttribute("hidden", "");
+    };
     try {
       const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       if (res.status === 401) {
-        button.disabled = false;
-        button.closest(".conversation-item")?.removeAttribute("aria-busy");
+        resetConfirm();
         window.toast("登录后才能删除历史对话");
         window.dispatchEvent(new CustomEvent("auth:request-login"));
         return;
@@ -373,8 +406,7 @@
       else renderConversationList();
       window.toast("对话已删除");
     } catch {
-      button.disabled = false;
-      button.closest(".conversation-item")?.removeAttribute("aria-busy");
+      resetConfirm();
       window.toast("删除失败，请稍后重试");
     }
   }

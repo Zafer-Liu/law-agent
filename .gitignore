@@ -20,3 +20,6 @@ Thumbs.db
 design/
 /.zvec-grep
 /.playwright-mcp
+
+# Local verification screenshots (root)
+/*.png

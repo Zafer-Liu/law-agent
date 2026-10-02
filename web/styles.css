@@ -109,7 +109,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item {
   width: 100%; min-height: 52px; padding-inline-end: 2px; border-radius: 9px;
   background: transparent; color: var(--text);
-  display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center;
   transition: background .18s, color .18s;
 }
 .conversation-item:hover { background: rgba(255,255,255,.72); }
@@ -133,6 +133,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
 }
 .conversation-delete-btn:hover { background: var(--primary-light); color: var(--danger); }
 .conversation-delete-btn:disabled { cursor: wait; }
+.conversation-item.confirm-delete { background: #fef2f2; box-shadow: inset 0 0 0 1.5px #fca5a5; }
+.conversation-item.confirm-delete .conversation-item-title { color: var(--danger); }
+.conversation-confirm-btn {
+  height: 32px; margin-inline-end: 6px; padding: 0 12px; border: 0; border-radius: 8px;
+  background: var(--danger); color: #fff; font-size: 12px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; font-family: var(--font); justify-self: end;
+}
+.conversation-confirm-btn:hover { filter: brightness(1.08); }
+.conversation-confirm-btn:disabled { cursor: wait; opacity: .7; }
 .conversation-empty { padding: 22px 10px; color: var(--text-muted); font-size: 12px; line-height: 1.7; text-align: center; }
 .conversation-backdrop { display: none; }
 
