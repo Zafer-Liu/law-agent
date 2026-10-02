@@ -154,6 +154,31 @@
         yours: { label: deliberation.label || "" },
         real: { summary: data.real_verdict.summary },
       });
+
+      // 庭审过程回顾：各方发言全程 + 书记员纪要
+      const processEl = document.getElementById("review-process");
+      const transcriptEl = document.getElementById("review-transcript");
+      const summariesWrap = document.getElementById("review-summaries-wrap");
+      const summariesEl = document.getElementById("review-summaries");
+      transcriptEl.innerHTML = "";
+      (data.transcript || []).forEach((item) => {
+        const line = document.createElement("div");
+        line.className = `log-line ${item.role || ""}${item.player ? " player-line" : ""}`;
+        const b = document.createElement("b");
+        b.textContent = item.name + "：";
+        line.appendChild(b);
+        line.appendChild(document.createTextNode(displayEvidenceNames(item.text)));
+        transcriptEl.appendChild(line);
+      });
+      summariesEl.innerHTML = "";
+      (data.summaries || []).forEach((note) => {
+        const p = document.createElement("p");
+        p.textContent = displayEvidenceNames(note);
+        summariesEl.appendChild(p);
+      });
+      summariesWrap.hidden = (data.summaries || []).length === 0;
+      processEl.hidden = (data.transcript || []).length === 0;
+
       document.getElementById("court-restart").textContent = "返回案件列表";
       verdictEl.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch {
@@ -954,6 +979,7 @@
     videoEl.removeAttribute("src");
     videoEl.load();
     document.getElementById("case-video-block").hidden = true;
+    document.getElementById("review-process").hidden = true;
     verdictEl.hidden = true;
     deliberationEl.hidden = true;
     trialEl.hidden = true;

@@ -1168,6 +1168,7 @@ def create_app() -> Flask:
         polls = state.get("polls") or []
         contributions = state.get("contributions") or []
         marks = deliberation.get("marks") or []
+        transcript = json.loads(row["transcript"] or "[]") or []
         return jsonify({
             "session_id": session_id,
             "case": court_cases.public_case(case, with_dossier=True),
@@ -1179,6 +1180,10 @@ def create_app() -> Flask:
             "marks": [m for m in marks if any(e["id"] == m for e in case["dossier"])],
             "real_verdict": case["real_verdict"],
             "analysis": row["analysis"] or "",
+            "transcript": [{"role": t.get("role", ""), "name": t.get("name", ""),
+                            "text": t.get("text", ""), "player": bool(t.get("player"))}
+                           for t in transcript if t.get("text")],
+            "summaries": [s for s in (state.get("summaries") or []) if s],
         })
 
     return app
