@@ -139,6 +139,7 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(client.get("/api/pet").status_code, 401)
         self.assertEqual(client.delete("/api/pet/memories").status_code, 401)
         self.assertEqual(client.get("/api/conversations").status_code, 401)
+        self.assertEqual(client.delete("/api/conversations/conv-a").status_code, 401)
         self.assertEqual(client.post("/api/court/cases/haicheng/trial",
                                      json={"role": "juror"}).status_code, 401)
 
@@ -172,6 +173,35 @@ class AccessControlTests(unittest.TestCase):
 
 
 class DataIsolationTests(unittest.TestCase):
+    def test_conversation_delete_is_scoped_and_cascades_messages(self):
+        app, directory = make_app()
+        client = app.test_client()
+        first = register(client, "alfa").get_json()["user"]
+        mine = f"u:{first['id']}"
+        other = register(client, "beta").get_json()["user"]
+        theirs = f"u:{other['id']}"
+        stamp = now_iso()
+        with Database(directory).connect() as db:
+            for owner, conversation_id in ((mine, "conv-mine"), (theirs, "conv-theirs")):
+                db.execute("INSERT INTO conversations(id,title,owner_id,created_at)"
+                           " VALUES (?,?,?,?)", (conversation_id, conversation_id, owner, stamp))
+                db.execute("INSERT INTO messages(id,conversation_id,role,content,payload,created_at)"
+                           " VALUES (?,?,?,?,?,?)",
+                           (new_id(), conversation_id, "user", "测试问题", "{}", stamp))
+
+        # 当前登录 beta，不能删除 alfa 的会话，但可以删除自己的会话。
+        denied = client.delete("/api/conversations/conv-mine")
+        deleted = client.delete("/api/conversations/conv-theirs")
+        self.assertEqual(denied.get_json()["deleted"], 0)
+        self.assertEqual(deleted.get_json()["deleted"], 1)
+        with Database(directory).connect() as db:
+            remaining_conversations = db.execute(
+                "SELECT id FROM conversations ORDER BY id").fetchall()
+            remaining_messages = db.execute(
+                "SELECT conversation_id FROM messages ORDER BY conversation_id").fetchall()
+        self.assertEqual([row["id"] for row in remaining_conversations], ["conv-mine"])
+        self.assertEqual([row["conversation_id"] for row in remaining_messages], ["conv-mine"])
+
     def test_conversations_and_pet_are_isolated_between_users(self):
         app, _ = make_app(configured_llm=True)
         client = app.test_client()

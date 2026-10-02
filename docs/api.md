@@ -131,6 +131,14 @@
 }
 ```
 
+### `DELETE /api/conversations/<conversation_id>`
+
+删除当前登录账户拥有的会话及其全部消息。接口会校验会话归属；目标不存在或不属于当前账户时返回 `deleted: 0`。
+
+```json
+{"deleted": 1}
+```
+
 ### `POST /api/ask`
 
 提交法律问题并接收 SSE。

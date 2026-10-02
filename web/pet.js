@@ -66,12 +66,12 @@
         <ul class="pet-reward-list"></ul>
         <p class="pet-reward-empty">完成有依据的问答或模拟庭审后，记录会出现在这里。</p>
       </details>
-      <div class="pet-memories">
-        <div class="pet-memories-head">獬豸的记忆<small class="pet-memory-count"></small></div>
+      <details class="pet-memories">
+        <summary class="pet-memories-head">獬豸的记忆<small class="pet-memory-count"></small></summary>
         <p class="pet-memory-consent"></p>
         <ul class="pet-memory-list"></ul>
         <p class="pet-memory-empty" hidden>还没有记忆，完成一次问答后獬豸就会记住这次咨询</p>
-      </div>
+      </details>
     </div>
     <div class="pet-bubble" role="status" aria-live="polite" aria-atomic="true"></div>
     <button class="pet-badge pet-fallback" type="button" data-stage="cub"

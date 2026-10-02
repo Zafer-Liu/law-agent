@@ -107,15 +107,32 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-total { font-variant-numeric: tabular-nums; }
 .conversation-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
 .conversation-item {
-  width: 100%; min-height: 52px; padding: 9px 10px; border: 0; border-radius: 9px;
-  background: transparent; color: var(--text); cursor: pointer; text-align: left;
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center;
+  width: 100%; min-height: 52px; padding-inline-end: 2px; border-radius: 9px;
+  background: transparent; color: var(--text);
+  display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center;
   transition: background .18s, color .18s;
 }
 .conversation-item:hover { background: rgba(255,255,255,.72); }
 .conversation-item.active { background: var(--surface); color: var(--primary-dark); box-shadow: var(--shadow); }
+.conversation-item[aria-busy="true"] { opacity: .62; }
+.conversation-item-open {
+  min-width: 0; min-height: 52px; padding: 9px 6px 9px 10px; border: 0;
+  background: transparent; color: inherit; cursor: pointer; text-align: left;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center;
+}
 .conversation-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .conversation-item-time { color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.conversation-delete-btn {
+  width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: background .18s, color .18s;
+}
+.conversation-delete-btn svg {
+  width: 17px; height: 17px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.conversation-delete-btn:hover { background: var(--primary-light); color: var(--danger); }
+.conversation-delete-btn:disabled { cursor: wait; }
 .conversation-empty { padding: 22px 10px; color: var(--text-muted); font-size: 12px; line-height: 1.7; text-align: center; }
 .conversation-backdrop { display: none; }
 

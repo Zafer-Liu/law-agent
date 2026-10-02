@@ -102,10 +102,20 @@
 
   conversationList.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
-    const button = event.target.closest("[data-conversation-id]");
-    if (!button) return;
+    const deleteButton = event.target.closest(".conversation-delete-btn");
+    if (deleteButton) {
+      if (sending) return window.toast("回答生成中，请稍候再删除对话");
+      deleteConversation(
+        deleteButton.dataset.conversationId,
+        deleteButton.dataset.conversationTitle,
+        deleteButton,
+      );
+      return;
+    }
+    const openButton = event.target.closest(".conversation-item-open");
+    if (!openButton) return;
     if (sending) return window.toast("回答生成中，请稍候再切换对话");
-    loadConversation(button.dataset.conversationId);
+    loadConversation(openButton.dataset.conversationId);
   });
 
   citationsToggle.addEventListener("click", () => {
@@ -290,12 +300,15 @@
     ));
     conversationList.replaceChildren();
     filtered.forEach((item) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "conversation-item";
-      button.dataset.conversationId = item.id;
-      button.classList.toggle("active", item.id === conversationId);
-      button.setAttribute("aria-current", item.id === conversationId ? "true" : "false");
+      const row = document.createElement("div");
+      row.className = "conversation-item";
+      row.classList.toggle("active", item.id === conversationId);
+
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "conversation-item-open";
+      openButton.dataset.conversationId = item.id;
+      openButton.setAttribute("aria-current", item.id === conversationId ? "true" : "false");
 
       const title = document.createElement("span");
       title.className = "conversation-item-title";
@@ -304,8 +317,19 @@
       time.className = "conversation-item-time";
       time.dateTime = item.updated_at || item.created_at;
       time.textContent = formatConversationTime(time.dateTime);
-      button.append(title, time);
-      conversationList.appendChild(button);
+      openButton.append(title, time);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "conversation-delete-btn";
+      deleteButton.dataset.conversationId = item.id;
+      deleteButton.dataset.conversationTitle = item.title;
+      deleteButton.setAttribute("aria-label", `删除对话：${item.title}`);
+      deleteButton.title = "删除对话";
+      deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4.75h6V7m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>';
+
+      row.append(openButton, deleteButton);
+      conversationList.appendChild(row);
     });
     conversationTotal.textContent = conversations.length ? String(conversations.length) : "";
     conversationEmpty.textContent = query ? "没有匹配的对话" : "还没有保存的对话";
@@ -320,6 +344,39 @@
       return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
     }
     return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+  }
+
+  async function deleteConversation(id, title, button) {
+    if (!id || button.disabled) return;
+    const displayTitle = title || "这条对话";
+    if (!window.confirm(`确定删除“${displayTitle}”吗？删除后无法恢复。`)) return;
+
+    button.disabled = true;
+    button.closest(".conversation-item")?.setAttribute("aria-busy", "true");
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (res.status === 401) {
+        button.disabled = false;
+        button.closest(".conversation-item")?.removeAttribute("aria-busy");
+        window.toast("登录后才能删除历史对话");
+        window.dispatchEvent(new CustomEvent("auth:request-login"));
+        return;
+      }
+      if (!res.ok) throw new Error("delete request failed");
+      const data = await res.json();
+      if (!data.deleted) throw new Error("conversation missing");
+
+      conversations = conversations.filter((item) => item.id !== id);
+      if (conversationId === id) startNewConversation();
+      else renderConversationList();
+      window.toast("对话已删除");
+    } catch {
+      button.disabled = false;
+      button.closest(".conversation-item")?.removeAttribute("aria-busy");
+      window.toast("删除失败，请稍后重试");
+    }
   }
 
   async function loadConversation(id) {

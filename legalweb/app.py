@@ -793,6 +793,16 @@ def create_app() -> Flask:
         return jsonify({"conversation": {"id": row["id"], "title": row["title"]},
                         "messages": [public_message(m) for m in messages]})
 
+    @app.delete("/api/conversations/<conversation_id>")
+    def conversation_delete(conversation_id):
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            deleted = db.execute(
+                "DELETE FROM conversations WHERE id=? AND owner_id=?",
+                (conversation_id, identity),
+            ).rowcount
+        return jsonify({"deleted": deleted})
+
     @app.post("/api/ask")
     def ask():
         data = request.get_json(force=True, silent=True) or {}

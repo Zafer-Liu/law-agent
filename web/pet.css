@@ -312,7 +312,7 @@
 }
 .pet-reward-empty { margin: 2px 0 0; line-height: 1.6; }
 
-/* 獬豸的记忆（成长面板内，后端按问答蒸馏） */
+/* 獬豸的记忆（成长面板内，后端按问答蒸馏；默认折叠，与「最近成长记录」一致的 details 模式） */
 .pet-memories {
   margin-top: 12px;
   padding-top: 10px;
@@ -320,13 +320,25 @@
 }
 .pet-memories-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
   margin-bottom: 4px;
   font-size: 12px;
   font-weight: 700;
+  cursor: pointer;
+  user-select: none;
 }
-.pet-memories-head small { color: var(--text-muted); font-size: 10px; font-weight: 400; }
+.pet-memories-head small { margin-left: auto; color: var(--text-muted); font-size: 10px; font-weight: 400; }
+.pet-memories-head::after {
+  content: "▸";
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  transition: transform .15s;
+}
+.pet-memories[open] > .pet-memories-head { margin-bottom: 0; }
+.pet-memories[open] > .pet-memories-head::after { transform: rotate(90deg); }
 .pet-memory-consent {
   margin: 0 0 6px;
   color: var(--text-muted);
@@ -398,7 +410,8 @@
 .pet-memory-clear:disabled { opacity: .55; cursor: wait; }
 
 .pet-panel button:focus-visible,
-.pet-rewards summary:focus-visible {
+.pet-rewards summary:focus-visible,
+.pet-memories-head:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
@@ -409,6 +422,7 @@
 
 @media (pointer: coarse) {
   .pet-rewards summary { min-height: 44px; line-height: 44px; }
+  .pet-memories-head { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -423,7 +437,8 @@
 @media (forced-colors: active) {
   .pet-badge:focus-visible,
   .pet-panel button:focus-visible,
-  .pet-rewards summary:focus-visible { outline-color: Highlight; }
+  .pet-rewards summary:focus-visible,
+  .pet-memories-head:focus-visible { outline-color: Highlight; }
   .pet-stage-dot { border: 1px solid CanvasText; background: Canvas; }
   .pet-stage-dot.reached { background: Highlight; }
   .pet-bar-fill { background: Highlight; }
