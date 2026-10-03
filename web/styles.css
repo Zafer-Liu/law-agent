@@ -109,20 +109,41 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item {
   width: 100%; min-height: 52px; padding-inline-end: 2px; border-radius: 9px;
   background: transparent; color: var(--text);
-  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: center;
   transition: background .18s, color .18s;
+  position: relative;
 }
-.conversation-actions { display: none; align-items: center; gap: 2px; }
+/* 按钮组绝对悬浮在行右端，不再挤压"打开"区域；6 个按钮在窄侧栏里曾把打开按钮挤成一条缝 */
+.conversation-actions { display: none; align-items: center; gap: 2px;
+  position: absolute; right: 42px; top: 50%; transform: translateY(-50%);
+  background: var(--surface); border-radius: 8px; padding: 0 2px;
+  box-shadow: -6px 0 8px -4px var(--surface); }
 .conversation-item:hover .conversation-actions,
 .conversation-item:focus-within .conversation-actions { display: flex; }
 .conversation-actions button {
-  width: 32px; height: 32px; display: grid; place-items: center; border: 0;
+  width: 27px; height: 27px; display: grid; place-items: center; border: 0;
   border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer;
 }
 .conversation-actions svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .conversation-actions button:hover { background: var(--primary-light); color: var(--primary); }
 .conversation-pin-btn[aria-pressed="true"] { color: var(--accent); }
+/* "更多"弹出菜单：分类 / 重命名 / 整理事项 / 导出 */
+.conversation-more-pop {
+  display: none; position: absolute; right: 4px; top: calc(100% - 2px); z-index: 30;
+  flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-md);
+}
+.conversation-item.more-open .conversation-more-pop { display: flex; }
+.conversation-more-pop button {
+  width: 30px; height: 30px; display: grid; place-items: center; border: 0;
+  border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.conversation-more-pop button:hover { background: var(--primary-light); color: var(--primary); }
+.conversation-more-pop svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.conversation-more-btn svg { stroke-width: 3.4; } /* 零长度路径画圆点，需加粗描边才可见 */
 .conversation-rename-input {
   width: 100%; min-height: 32px; padding: 4px 8px; border: 1px solid var(--primary);
   border-radius: 6px; background: var(--surface); font-size: 13px;
@@ -154,7 +175,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .conversation-item-time { color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .conversation-delete-btn {
-  width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
   background: transparent; color: var(--text-muted); cursor: pointer;
   transition: background .18s, color .18s;
 }
@@ -1066,7 +1088,10 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
   display: flex; flex-direction: column; gap: 12px;
 }
 .matter-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.matter-sidebar-head h2 { font-size: 15px; margin: 0; }
+.matter-sidebar-head h2 { font-size: 15px; margin: 0; white-space: nowrap; flex: 0 0 auto; }
+/* 覆盖 .new-conversation-btn 的 width:100%：弹性行内按钮收缩为内容宽，避免把标题挤成两行 */
+.matter-sidebar-head .new-conversation-btn { width: auto; flex: 0 0 auto;
+  min-height: 36px; padding: 7px 10px; gap: 6px; font-size: 13px; }
 .matter-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .matter-item {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 6px; align-items: center;

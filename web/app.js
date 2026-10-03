@@ -141,6 +141,22 @@
 
   conversationList.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
+    // 点击别处时收起已展开的"更多"菜单
+    const currentRow = event.target.closest(".conversation-item");
+    conversationList.querySelectorAll(".conversation-item.more-open").forEach((row) => {
+      if (row !== currentRow) {
+        row.classList.remove("more-open");
+        row.querySelector(".conversation-more-btn")?.setAttribute("aria-expanded", "false");
+      }
+    });
+    const moreButton = event.target.closest(".conversation-more-btn");
+    if (moreButton) {
+      const row = moreButton.closest(".conversation-item");
+      const open = !row.classList.contains("more-open");
+      row.classList.toggle("more-open", open);
+      moreButton.setAttribute("aria-expanded", String(open));
+      return;
+    }
     const confirmButton = event.target.closest(".conversation-confirm-btn");
     if (confirmButton) {
       if (sending) return window.toast("回答生成中，请稍后再删除对话");
@@ -410,6 +426,7 @@
     sending = true;
     sendBtn.disabled = true;
     input.value = "";
+    const isNewConversation = !conversationId;
     if (isNewConversation) chatTitle.textContent = question.slice(0, 60);
 
     // 移除欢迎页
@@ -422,7 +439,6 @@
     stream.status("正在查找相关法律…");
     clearCitations();
     let resultEvent = null;
-    const isNewConversation = !conversationId;
     if (isNewConversation) track("qa_ask", { new_conversation: true });
     else track("qa_ask", { new_conversation: false });
     const requestId = crypto.randomUUID
@@ -593,6 +609,18 @@
         item.pinned ? `取消置顶：${item.title}` : `置顶：${item.title}`);
       pinButton.title = item.pinned ? "取消置顶" : "置顶";
       pinButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.75h6l-.7 5.2 3 3.3H6.7l3-3.3L9 4.75Z"/><path d="M12 13.25V19.2"/></svg>';
+      // 窄侧栏放不下 6 个按钮：其余操作收进"更多"弹出菜单
+      const moreButton = document.createElement("button");
+      moreButton.type = "button";
+      moreButton.className = "conversation-more-btn";
+      moreButton.setAttribute("aria-label", `更多操作：${item.title}`);
+      moreButton.setAttribute("aria-expanded", "false");
+      moreButton.title = "更多操作";
+      moreButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.01v.01M12 12v.01M12 17.99v.01"/></svg>';
+      actions.append(pinButton, moreButton);
+
+      const morePop = document.createElement("div");
+      morePop.className = "conversation-more-pop";
       const categoryButton = document.createElement("button");
       categoryButton.type = "button";
       categoryButton.className = "conversation-category-btn";
@@ -618,7 +646,7 @@
       exportButton.setAttribute("aria-label", `导出为 Markdown：${item.title}`);
       exportButton.title = "导出为 Markdown";
       exportButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.75v10m0 0 3.5-3.5M12 14.75l-3.5-3.5"/><path d="M5 19.25h14"/></svg>';
-      actions.append(pinButton, categoryButton, renameButton, matterButton, exportButton);
+      morePop.append(categoryButton, renameButton, matterButton, exportButton);
 
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
@@ -637,7 +665,7 @@
       confirmButton.hidden = true;
       confirmButton.textContent = "确认删除";
 
-      row.append(openButton, actions, deleteButton, confirmButton);
+      row.append(openButton, actions, morePop, deleteButton, confirmButton);
       conversationList.appendChild(row);
     });
     conversationTotal.textContent = conversations.length ? String(conversations.length) : "";
