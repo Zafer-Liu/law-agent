@@ -28,8 +28,10 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from . import matter as matter_module
 from . import qa
 from .courtroom import cases as court_cases
+from .courtroom import scoring as court_scoring
 from .courtroom.engine import PLAYER_ROLES, TrialEngine
 from .database import Database, new_id, now_iso, public_message
 from .documents import FORMATS, parse_document, split_sections
@@ -37,6 +39,7 @@ from .jev_gate import configured as jev_configured
 from .llm import LLMClient, LLMError
 from .pkulaw import PkulawClient
 from .rag import EmbeddingClient, retrieve, terms, tokenize
+from .source_meta import build_validity, parse_source_meta
 
 LOG = logging.getLogger("legalweb")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -119,6 +122,17 @@ RETIRED_SEED_TITLES = {
     "民法典与合同规则（普法节选）",
     "刑法（演示用节选）",
     "刑事诉讼法（庭审程序演示用节选）",
+    # 效力治理（2026-10-03 下架）：废止或已被修改的文本不再参与检索，
+    # 避免回答引用失效依据；现行有效版本（民法典、2020 二次修正等）保留。
+    # 每条含旧库命名的 legacy 变体（文件名 stem 直接当标题的时代）。
+    "法条 · 中华人民共和国合同法",            # 废止，已被民法典合同编取代
+    "法条 · 中华人民共和国合同法(FBMCLI.1.21651)",
+    "法条 · 借款合同条例",                    # 废止（1985 年国务院法规）
+    "法条 · 借款合同条例(FBM-CLI.2.2307)",
+    "法条 · 最高人民法院关于审理民间借贷案件适用法律若干问题的规定",            # 2015 原版
+    "法条 · 最高人民法院关于审理民间借贷案件适用法律若干问题的规定(FBMCLI.3.252673)",
+    "法条 · 最高人民法院关于审理民间借贷案件适用法律若干问题的规定(2020修正)",  # 第一次修正
+    "法条 · 最高人民法院关于审理民间借贷案件适用法律若干问题的规定(2020修正)(FBMCLI.3.345304)",
 }
 
 
@@ -183,7 +197,7 @@ def pet_forget_old(db, client_id: str) -> None:
 def apply_pet_reward(db, client_id: str, kind: str,
                      gain: int, event_id: str) -> bool:
     """在一个事务内登记奖励事件并累加进度；返回本次是否首次发放。"""
-    if kind not in ("qa", "court") or gain <= 0 or not event_id:
+    if kind not in ("qa", "court", "knowledge") or gain <= 0 or not event_id:
         return False
     created_at = now_iso()
     inserted = db.execute(
@@ -192,15 +206,24 @@ def apply_pet_reward(db, client_id: str, kind: str,
         (event_id, client_id, kind, gain, created_at)).rowcount == 1
     if not inserted:
         return False
-    counter = "qa_count" if kind == "qa" else "court_count"
-    db.execute(
-        "INSERT INTO pet_progress (client_id,exp,qa_count,court_count,updated_at)"
-        " VALUES (?,?,?,?,?)"
-        " ON CONFLICT(client_id) DO UPDATE SET"
-        " exp=pet_progress.exp+excluded.exp,"
-        f" {counter}=pet_progress.{counter}+1,"
-        " updated_at=excluded.updated_at",
-        (client_id, gain, kind == "qa", kind == "court", created_at))
+    # knowledge（掌握知识点）不设计数列，进度由 knowledge_points 聚合
+    if kind in ("qa", "court"):
+        counter = "qa_count" if kind == "qa" else "court_count"
+        db.execute(
+            "INSERT INTO pet_progress (client_id,exp,qa_count,court_count,updated_at)"
+            " VALUES (?,?,?,?,?)"
+            " ON CONFLICT(client_id) DO UPDATE SET"
+            " exp=pet_progress.exp+excluded.exp,"
+            f" {counter}=pet_progress.{counter}+1,"
+            " updated_at=excluded.updated_at",
+            (client_id, gain, kind == "qa", kind == "court", created_at))
+    else:
+        db.execute(
+            "INSERT INTO pet_progress (client_id,exp,qa_count,court_count,updated_at)"
+            " VALUES (?,?,?,?,?)"
+            " ON CONFLICT(client_id) DO UPDATE SET"
+            " exp=pet_progress.exp+excluded.exp, updated_at=excluded.updated_at",
+            (client_id, gain, 0, 0, created_at))
     return True
 
 
@@ -240,6 +263,7 @@ def index_document(database: Database, embedder: EmbeddingClient,
     chunks = split_sections(sections)
     source_id = new_id()
     title = (title or Path(filename).stem).strip()[:120]
+    meta = parse_source_meta(sections[0]["text"] if sections else "", title)
     embeddings, space = [], ""
     if embedder.configured:
         try:
@@ -247,8 +271,10 @@ def index_document(database: Database, embedder: EmbeddingClient,
         except ValueError as exc:
             LOG.warning("embedding degraded for %s: %s", title, exc)
     with database.connect() as db:
-        db.execute("INSERT INTO sources (id,title,filename,status,chunk_count,created_at) VALUES (?,?,?,?,?,?)",
-                   (source_id, title, filename, "ready", len(chunks), now_iso()))
+        db.execute("INSERT INTO sources (id,title,filename,status,chunk_count,created_at,meta)"
+                   " VALUES (?,?,?,?,?,?,?)",
+                   (source_id, title, filename, "ready", len(chunks), now_iso(),
+                    json.dumps(meta, ensure_ascii=False) if meta else ""))
         for chunk, vector in zip_longest(chunks, embeddings):
             cursor = db.execute(
                 "INSERT INTO chunks (source_id, ordinal, section, text, embedding, embedding_space)"
@@ -296,9 +322,27 @@ def builtin_documents():
         seen_digests.add(digest)
         display = _doc_display_title(path)
         title = f"{category} · {display}" if category else display
+        # 效力治理：文件仍保留在仓库，但废止/已被修改的文本不再进入检索
+        if title in RETIRED_SEED_TITLES:
+            continue
         # 旧版命名（文件名 stem 直接当标题）作迁移对照
         legacy = f"{category} · {path.stem}" if category else path.stem
         yield path, title[:120], legacy[:120]
+
+
+def backfill_source_meta(database: Database) -> None:
+    """旧库补录：从每个来源的首个分块解析效力元数据（幂等，有 meta 即跳过）。"""
+    with database.connect() as db:
+        rows = db.execute(
+            "SELECT s.id, s.title,"
+            " (SELECT c.text FROM chunks c WHERE c.source_id=s.id"
+            "  ORDER BY c.ordinal LIMIT 1) AS head"
+            " FROM sources s WHERE s.meta=''").fetchall()
+        for row in rows:
+            meta = parse_source_meta(row["head"] or "", row["title"])
+            if meta:
+                db.execute("UPDATE sources SET meta=? WHERE id=?",
+                           (json.dumps(meta, ensure_ascii=False), row["id"]))
 
 
 def seed_sources(database: Database, embedder: EmbeddingClient):
@@ -321,6 +365,7 @@ def seed_sources(database: Database, embedder: EmbeddingClient):
             LOG.info("seeded knowledge source %s (%d chunks)", title, summary["chunk_count"])
         except ValueError as exc:
             LOG.warning("seed %s failed: %s", path.name, exc)
+    backfill_source_meta(database)
 
 
 def create_app() -> Flask:
@@ -515,6 +560,141 @@ def create_app() -> Flask:
         return jsonify({"user": public_user(user) if user else None})
 
     # ------------------------------------------------------------------
+    # 账户数据控制：修改密码 / 导出全部数据 / 注销账号
+    # ------------------------------------------------------------------
+    @app.post("/api/auth/password")
+    def auth_password():
+        user = require_user()
+        if not _auth_rate_ok():
+            abort(429, "尝试过于频繁，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        current_password = str(data.get("current_password") or "")
+        new_password = str(data.get("new_password") or "")
+        if not AUTH_PASSWORD_MIN <= len(new_password) <= AUTH_PASSWORD_MAX:
+            abort(400, "新密码需为 6-128 位")
+        if current_password == new_password:
+            abort(400, "新密码不能与当前密码相同")
+        token = request.cookies.get(AUTH_COOKIE, "")
+        with database.connect() as db:
+            row = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+            if not row or not check_password_hash(row["password_hash"], current_password):
+                abort(403, "当前密码不正确")
+            db.execute("UPDATE users SET password_hash=? WHERE id=?",
+                       (generate_password_hash(new_password), user["id"]))
+            # 改密后吊销其它设备上的会话，当前会话保留
+            if token:
+                db.execute("DELETE FROM auth_sessions WHERE user_id=? AND token<>?",
+                           (user["id"], token))
+        LOG.info("用户修改密码 · %s", user["username"])
+        return jsonify({"ok": True})
+
+    @app.get("/api/account/export")
+    def account_export():
+        """导出当前账户的全部数据（JSON 下载）。"""
+        user = require_user()
+        identity = user_identity(user)
+        with database.connect() as db:
+            conversations = [dict(row) for row in db.execute(
+                "SELECT id,title,created_at FROM conversations"
+                " WHERE owner_id=? ORDER BY created_at", (identity,))]
+            for conversation in conversations:
+                conversation["messages"] = [public_message(m) for m in db.execute(
+                    "SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at",
+                    (conversation["id"],))]
+            court_rows = db.execute(
+                "SELECT id,case_id,created_at,finished_at,deliberation,analysis,transcript"
+                " FROM court_sessions WHERE owner_id=? ORDER BY created_at",
+                (identity,)).fetchall()
+            court_sessions = []
+            for row in court_rows:
+                court_sessions.append({
+                    "id": row["id"], "case_id": row["case_id"],
+                    "created_at": row["created_at"], "finished_at": row["finished_at"],
+                    "deliberation": json.loads(row["deliberation"] or "null"),
+                    "analysis": row["analysis"],
+                    "transcript": json.loads(row["transcript"] or "[]"),
+                })
+            progress = db.execute("SELECT * FROM pet_progress WHERE client_id=?",
+                                  (identity,)).fetchone()
+            pet = {
+                "progress": dict(progress) if progress else None,
+                "memories": [dict(row) for row in db.execute(
+                    "SELECT content,created_at FROM pet_memories WHERE client_id=?"
+                    " ORDER BY id", (identity,))],
+                "rewards": [dict(row) for row in db.execute(
+                    "SELECT kind,gain,created_at FROM pet_reward_events WHERE client_id=?"
+                    " ORDER BY id", (identity,))],
+            }
+            feedback = [dict(row) for row in db.execute(
+                "SELECT f.rating,f.reason,f.comment,f.created_at,m.content AS answer"
+                " FROM answer_feedback f LEFT JOIN messages m ON m.id=f.message_id"
+                " WHERE f.user_id=? ORDER BY f.id", (user["id"],))]
+            matters = [matter_public(row) for row in db.execute(
+                "SELECT * FROM matters WHERE owner_id=? ORDER BY created_at",
+                (identity,)).fetchall()]
+            knowledge = [dict(row) for row in db.execute(
+                "SELECT article_ref,title,case_id,status,created_at,updated_at"
+                " FROM knowledge_points WHERE owner_id=? ORDER BY id",
+                (identity,)).fetchall()]
+        payload = {
+            "exported_at": now_iso(),
+            "account": public_user(user),
+            "conversations": conversations,
+            "matters": matters,
+            "knowledge": knowledge,
+            "court_sessions": court_sessions,
+            "pet": pet,
+            "feedback": feedback,
+        }
+        response = jsonify(payload)
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="faxiao-export-%s.json"' % user["id"][:12])
+        return response
+
+    @app.post("/api/account/delete")
+    def account_delete():
+        """注销账号：需密码二次确认，删除该账户名下的全部数据（不可恢复）。"""
+        user = require_user()
+        if not _auth_rate_ok():
+            abort(429, "尝试过于频繁，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        if str(data.get("confirm") or "") != "DELETE":
+            abort(400, "请输入 DELETE 确认注销")
+        password = str(data.get("password") or "")
+        identity = user_identity(user)
+        with database.connect() as db:
+            row = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+            if not row or not check_password_hash(row["password_hash"], password):
+                abort(403, "密码不正确")
+            if user["is_admin"]:
+                other_admins = db.execute(
+                    "SELECT COUNT(*) AS n FROM users WHERE is_admin=1 AND id<>?",
+                    (user["id"],)).fetchone()["n"]
+                if not other_admins:
+                    abort(409, "系统至少需要保留一名管理员，请先转移管理员权限")
+            conversation_ids = [r["id"] for r in db.execute(
+                "SELECT id FROM conversations WHERE owner_id=?", (identity,)).fetchall()]
+            if conversation_ids:
+                marks = ",".join("?" * len(conversation_ids))
+                db.execute(f"DELETE FROM messages WHERE conversation_id IN ({marks})",
+                           conversation_ids)
+                db.execute(f"DELETE FROM conversations WHERE id IN ({marks})",
+                           conversation_ids)
+            db.execute("DELETE FROM court_sessions WHERE owner_id=?", (identity,))
+            db.execute("DELETE FROM matters WHERE owner_id=?", (identity,))
+            db.execute("DELETE FROM knowledge_points WHERE owner_id=?", (identity,))
+            db.execute("DELETE FROM pet_progress WHERE client_id=?", (identity,))
+            db.execute("DELETE FROM pet_memories WHERE client_id=?", (identity,))
+            db.execute("DELETE FROM pet_reward_events WHERE client_id=?", (identity,))
+            db.execute("DELETE FROM answer_feedback WHERE user_id=?", (user["id"],))
+            db.execute("DELETE FROM events WHERE user_id=?", (user["id"],))
+            db.execute("DELETE FROM users WHERE id=?", (user["id"],))  # 会话级联删除
+        LOG.info("用户注销账号 · %s", user["username"])
+        response = jsonify({"ok": True})
+        response.delete_cookie(AUTH_COOKIE, path="/")
+        return response
+
+    # ------------------------------------------------------------------
     # 诊断：设置与日志（全局开关，仅管理员）
     # ------------------------------------------------------------------
     @app.get("/api/settings")
@@ -578,7 +758,8 @@ def create_app() -> Flask:
     def _load_chunks() -> list[dict]:
         with database.connect() as db:
             rows = db.execute(
-                "SELECT c.*, s.title AS source_title FROM chunks c "
+                "SELECT c.*, s.title AS source_title, s.meta AS source_meta,"
+                " s.created_at AS source_indexed_at FROM chunks c "
                 "JOIN sources s ON s.id=c.source_id ORDER BY c.source_id, c.ordinal"
             ).fetchall()
         chunks = []
@@ -609,21 +790,25 @@ def create_app() -> Flask:
     @app.get("/api/kb")
     def kb_list():
         with database.connect() as db:
-            rows = db.execute("SELECT id,title,filename,chunk_count,created_at FROM sources"
+            rows = db.execute("SELECT id,title,filename,chunk_count,created_at,meta FROM sources"
                               " ORDER BY created_at").fetchall()
-        return jsonify({"sources": [dict(row) for row in rows],
+        return jsonify({"sources": [dict(row) | {
+                            "validity": build_validity(row["meta"], indexed_at=row["created_at"])}
+                            for row in rows],
                         "embed_configured": embedder.configured})
 
     @app.get("/api/kb/<source_id>")
     def kb_detail(source_id):
         with database.connect() as db:
-            src = db.execute("SELECT id,title,chunk_count,created_at FROM sources"
+            src = db.execute("SELECT id,title,chunk_count,created_at,meta FROM sources"
                              " WHERE id=?", (source_id,)).fetchone()
             if src is None:
                 abort(404, "资料不存在")
             rows = db.execute("SELECT ordinal,section,text FROM chunks"
                               " WHERE source_id=? ORDER BY ordinal", (source_id,)).fetchall()
-        return jsonify({"source": dict(src), "chunks": [dict(row) for row in rows]})
+        return jsonify({"source": dict(src) | {
+                            "validity": build_validity(src["meta"], indexed_at=src["created_at"])},
+                        "chunks": [dict(row) for row in rows]})
 
     @app.post("/api/kb")
     def kb_upload():
@@ -677,7 +862,15 @@ def create_app() -> Flask:
         {"key": "luck", "name": "祥瑞", "need": 1000, "title": "德刑昭明，天下大安",
          "appearance": "祥瑞金辉环绕全身"},
     )
-    PET_GAINS = {"qa": 2, "court": 10}
+    PET_GAINS = {"qa": 2, "court": 10, "knowledge": 6}
+
+    def pet_knowledge_counts(db, identity: str) -> dict:
+        """知识点掌握统计：已掌握 / 待复习（驱动獬豸的学习导航角色）。"""
+        rows = db.execute(
+            "SELECT status, COUNT(*) AS n FROM knowledge_points"
+            " WHERE owner_id=? GROUP BY status", (identity,)).fetchall()
+        counts = {row["status"]: row["n"] for row in rows}
+        return {"mastered": counts.get("mastered", 0), "review": counts.get("review", 0)}
 
     def pet_state(row, client_id: str = "") -> dict:
         exp = row["exp"] if row else 0
@@ -705,6 +898,7 @@ def create_app() -> Flask:
             with database.connect() as db:
                 state.update(load_pet_memories(db, client_id))
                 state["recent_rewards"] = load_pet_rewards(db, client_id)
+                state["knowledge"] = pet_knowledge_counts(db, client_id)
         return state
 
     def pet_tick(client_id: str, kind: str, event_id: str) -> dict:
@@ -764,26 +958,30 @@ def create_app() -> Flask:
                 (memory_id, identity)).rowcount
         return jsonify({"deleted": deleted})
 
+    # 会话分类白名单（侧栏分组过滤用）
+    CONVERSATION_CATEGORIES = ("劳动", "合同", "消费", "侵权", "婚姻家庭", "刑事", "其他")
+
     @app.get("/api/conversations")
     def conversation_list():
         identity = user_identity(require_user())
         with database.connect() as db:
             rows = db.execute(
-                "SELECT c.id,c.title,c.created_at,"
+                "SELECT c.id,c.title,c.pinned,c.category,c.created_at,"
                 " COALESCE((SELECT MAX(m.created_at) FROM messages m"
                 " WHERE m.conversation_id=c.id),c.created_at) AS updated_at,"
                 " COALESCE((SELECT m.content FROM messages m"
                 " WHERE m.conversation_id=c.id ORDER BY m.created_at DESC LIMIT 1),'') AS preview"
                 " FROM conversations c WHERE c.owner_id=?"
                 " AND EXISTS(SELECT 1 FROM messages m WHERE m.conversation_id=c.id)"
-                " ORDER BY updated_at DESC LIMIT 60",
+                " ORDER BY c.pinned DESC, updated_at DESC LIMIT 60",
                 (identity,),
             ).fetchall()
         return jsonify({"conversations": [dict(row) for row in rows]})
 
     @app.get("/api/conversations/<conversation_id>")
     def conversation_detail(conversation_id):
-        identity = user_identity(require_user())
+        user = require_user()
+        identity = user_identity(user)
         with database.connect() as db:
             row = db.execute("SELECT id,title FROM conversations WHERE id=? AND owner_id=?",
                              (conversation_id, identity)).fetchone()
@@ -791,8 +989,21 @@ def create_app() -> Flask:
                 return jsonify({"conversation": None})
             messages = db.execute("SELECT * FROM messages WHERE conversation_id=?"
                                   " ORDER BY created_at", (conversation_id,)).fetchall()
+            # 本用户在当前会话消息上的反馈状态（历史加载时回显）
+            ratings = {feedback["message_id"]: feedback["rating"]
+                       for feedback in db.execute(
+                           "SELECT f.message_id, f.rating FROM answer_feedback f"
+                           " JOIN messages m ON m.id=f.message_id"
+                           " WHERE m.conversation_id=? AND f.user_id=?",
+                           (conversation_id, user["id"])).fetchall()}
+        rendered = []
+        for message in messages:
+            item = public_message(message)
+            if item["role"] == "assistant" and item["id"] in ratings:
+                item["feedback"] = ratings[item["id"]]
+            rendered.append(item)
         return jsonify({"conversation": {"id": row["id"], "title": row["title"]},
-                        "messages": [public_message(m) for m in messages]})
+                        "messages": rendered})
 
     @app.delete("/api/conversations/<conversation_id>")
     def conversation_delete(conversation_id):
@@ -803,6 +1014,532 @@ def create_app() -> Flask:
                 (conversation_id, identity),
             ).rowcount
         return jsonify({"deleted": deleted})
+
+    @app.patch("/api/conversations/<conversation_id>")
+    def conversation_rename(conversation_id):
+        identity = user_identity(require_user())
+        data = request.get_json(force=True, silent=True) or {}
+        title = text_value(data, "title", limit=60)
+        category = text_value(data, "category", limit=16)
+        if category and category not in CONVERSATION_CATEGORIES:
+            abort(400, "无效的会话分类")
+        updates, params = [], []
+        if "title" in data:
+            if not 1 <= len(title) <= 60:
+                abort(400, "标题需为 1-60 字")
+            updates.append("title=?")
+            params.append(title)
+        if "category" in data:
+            updates.append("category=?")
+            params.append(category)
+        if not updates:
+            abort(400, "没有可更新的字段")
+        params.extend([conversation_id, identity])
+        with database.connect() as db:
+            updated = db.execute(
+                f"UPDATE conversations SET {','.join(updates)} WHERE id=? AND owner_id=?",
+                params).rowcount
+        if not updated:
+            return jsonify({"updated": 0})
+        return jsonify({"updated": 1, "title": title or None, "category": category or None})
+
+    @app.post("/api/conversations/<conversation_id>/pin")
+    def conversation_pin(conversation_id):
+        identity = user_identity(require_user())
+        data = request.get_json(force=True, silent=True) or {}
+        pinned = 1 if data.get("pinned") is True else 0
+        with database.connect() as db:
+            updated = db.execute(
+                "UPDATE conversations SET pinned=? WHERE id=? AND owner_id=?",
+                (pinned, conversation_id, identity)).rowcount
+        return jsonify({"updated": updated, "pinned": bool(pinned)})
+
+    @app.get("/api/conversations/<conversation_id>/export")
+    def conversation_export(conversation_id):
+        """把一次对话导出为 Markdown 文件（事项归档/线下留存）。"""
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            row = db.execute("SELECT id,title,created_at FROM conversations"
+                             " WHERE id=? AND owner_id=?",
+                             (conversation_id, identity)).fetchone()
+            if not row:
+                abort(404, "对话不存在")
+            messages = db.execute("SELECT role,content,payload,created_at FROM messages"
+                                  " WHERE conversation_id=? ORDER BY created_at",
+                                  (conversation_id,)).fetchall()
+        lines = [f"# {row['title']}", "",
+                 f"> 由法晓导出 · 会话建立于 {row['created_at'][:19].replace('T', ' ')}", ""]
+        for message in messages:
+            speaker = "问" if message["role"] == "user" else "法晓"
+            lines.append(f"## {speaker} · {message['created_at'][:19].replace('T', ' ')}")
+            lines.append("")
+            lines.append(message["content"])
+            if message["role"] == "assistant":
+                try:
+                    citations = json.loads(message["payload"] or "{}").get("citations") or []
+                except ValueError:
+                    citations = []
+                for citation in citations:
+                    section = " / ".join(part for part in
+                                         (citation.get("source"), citation.get("article")) if part)
+                    lines.append(f"- 依据：{section or citation.get('label', '')}")
+            lines.append("")
+        lines.append("---")
+        lines.append("本内容仅为一般性法律信息，不构成法律意见。")
+        markdown = "\n".join(lines)
+        safe_name = re.sub(r"[^\w一-鿿-]+", "_", row["title"])[:40] or "conversation"
+        response = Response(markdown, mimetype="text/markdown; charset=utf-8")
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="{safe_name}.md"')
+        return response
+
+    @app.post("/api/conversations/<conversation_id>/intake")
+    def conversation_intake(conversation_id):
+        """把多轮对话蒸馏成工作台采集表单；用户在表单确认后才生成报告。"""
+        identity = user_identity(require_user())
+        if not qa_llm.configured:
+            abort(503, "智能服务暂不可用，请稍后再试")
+        with database.connect() as db:
+            row = db.execute("SELECT id FROM conversations WHERE id=? AND owner_id=?",
+                             (conversation_id, identity)).fetchone()
+            if not row:
+                abort(404, "对话不存在")
+            messages = db.execute("SELECT role,content FROM messages"
+                                  " WHERE conversation_id=? ORDER BY created_at",
+                                  (conversation_id,)).fetchall()
+        try:
+            raw = qa_llm.complete(matter_module.build_distill_messages(
+                [dict(item) for item in messages]), temperature=0.1, max_tokens=1500)
+            intake = matter_module.parse_distilled_intake(raw)
+        except (LLMError, ValueError):
+            abort(503, "案情整理暂时失败，请稍后重试或手动填写")
+        if not intake.get("what") or not intake.get("goal"):
+            abort(422, "这段对话还不足以整理出案情，请在工作台手动填写")
+        return jsonify({"intake": intake})
+
+    # ------------------------------------------------------------------
+    # 回答反馈：每条回答「有帮助 / 没帮助」；没帮助时可选原因与补充说明
+    # ------------------------------------------------------------------
+    FEEDBACK_REASONS = frozenset({
+        "inaccurate",    # 内容不准确
+        "outdated",      # 依据过时
+        "irrelevant",    # 答非所问
+        "unclear",       # 看不懂
+        "verbose",       # 太冗长
+        "other",
+    })
+
+    @app.post("/api/feedback")
+    def feedback_submit():
+        user = require_user()
+        data = request.get_json(force=True, silent=True) or {}
+        message_id = text_value(data, "message_id", limit=64)
+        rating = text_value(data, "rating", limit=16)
+        reason = text_value(data, "reason", limit=32)
+        comment = text_value(data, "comment", limit=500)
+        if rating not in ("helpful", "unhelpful"):
+            abort(400, "无效的反馈类型")
+        if reason and reason not in FEEDBACK_REASONS:
+            abort(400, "无效的反馈原因")
+        if rating == "unhelpful" and not reason:
+            reason = "other"
+        with database.connect() as db:
+            found = db.execute(
+                "SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id"
+                " WHERE m.id=? AND m.role='assistant' AND c.owner_id=?",
+                (message_id, user_identity(user))).fetchone()
+            if not found:
+                abort(404, "回答不存在或无权评价")
+            # 同一条回答可改判：upsert 覆盖此前的反馈
+            db.execute(
+                "INSERT INTO answer_feedback (message_id,user_id,rating,reason,comment,created_at)"
+                " VALUES (?,?,?,?,?,?)"
+                " ON CONFLICT(user_id,message_id) DO UPDATE SET"
+                " rating=excluded.rating, reason=excluded.reason,"
+                " comment=excluded.comment, created_at=excluded.created_at",
+                (message_id, user["id"], rating, reason, comment, now_iso()))
+        return jsonify({"ok": True})
+
+    @app.get("/api/feedback")
+    def feedback_list():
+        """管理员查看最近反馈（带对应问答片段），用于发现答错/过时等问题。"""
+        require_admin()
+        with database.connect() as db:
+            rows = db.execute(
+                "SELECT f.rating, f.reason, f.comment, f.created_at,"
+                " m.content AS answer,"
+                " (SELECT q.content FROM messages q WHERE q.conversation_id=m.conversation_id"
+                "  AND q.role='user' AND q.created_at<=m.created_at"
+                "  ORDER BY q.created_at DESC LIMIT 1) AS question"
+                " FROM answer_feedback f LEFT JOIN messages m ON m.id=f.message_id"
+                " ORDER BY f.id DESC LIMIT 100").fetchall()
+            stats = {row["rating"]: row["n"] for row in db.execute(
+                "SELECT rating, COUNT(*) AS n FROM answer_feedback GROUP BY rating")}
+            reasons = {row["reason"]: row["n"] for row in db.execute(
+                "SELECT reason, COUNT(*) AS n FROM answer_feedback"
+                " WHERE reason<>'' GROUP BY reason ORDER BY n DESC")}
+        recent = [{**dict(row), "answer": (row["answer"] or "")[:400],
+                   "question": (row["question"] or "")[:200]} for row in rows]
+        return jsonify({"recent": recent, "stats": stats, "reasons": reasons})
+
+    # ------------------------------------------------------------------
+    # 产品事件埋点：登录用户的关键行为事件（白名单 + 属性裁剪，不含问题内容）
+    # ------------------------------------------------------------------
+    EVENT_NAMES = frozenset({
+        "qa_ask",             # 发起提问（区分新会话/追问）
+        "answer_received",    # 收到回答（是否带依据、引用数）
+        "citation_open",      # 展开法律原文/引用
+        "feedback_submitted", # 提交回答反馈
+        "court_case_open",    # 打开案例详情
+        "court_start",        # 开始庭审（含角色）
+        "court_complete",     # 完成评议
+        "court_review",       # 查看复盘
+        "module_switch",      # 跨模块切换（问答 ⇄ 法庭）
+        "account_export",     # 导出自己的数据
+        "matter_created",     # 工作台提交案情采集
+        "matter_completed",   # 工作台生成分析报告
+        "matter_review",      # 查看既有事项档案
+        "matter_to_court",    # 从事项档案进入推荐庭审
+        "knowledge_marked",   # 标记知识点（已掌握/待复习）
+        "qa_to_court",        # 从问答回答进入推荐庭审
+        "reasoning_scored",   # 评议提交说理并获得评分
+        "learn_map_viewed",   # 查看学习地图
+    })
+    EVENT_MAX_BATCH = 20
+    EVENT_SUMMARY_DAYS = 30
+
+    def _clean_event_props(props) -> dict:
+        """事件属性白名单化：只保留短字符串和数值，防止埋点变成自由文本入口。"""
+        if not isinstance(props, dict):
+            return {}
+        cleaned = {}
+        for key, value in list(props.items())[:12]:
+            if not isinstance(key, str) or len(key) > 32:
+                continue
+            if isinstance(value, bool) or isinstance(value, (int, float)):
+                cleaned[key] = value
+            elif isinstance(value, str):
+                cleaned[key] = value[:120]
+        return cleaned
+
+    @app.post("/api/events")
+    def events_submit():
+        user = require_user()
+        data = request.get_json(force=True, silent=True) or {}
+        events = data.get("events")
+        if not isinstance(events, list) or not events:
+            abort(400, "缺少事件数据")
+        rows = []
+        for item in events[:EVENT_MAX_BATCH]:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if name not in EVENT_NAMES:
+                continue
+            rows.append((user["id"], name,
+                         json.dumps(_clean_event_props(item.get("props")), ensure_ascii=False),
+                         now_iso()))
+        if not rows:
+            return jsonify({"stored": 0})
+        with database.connect() as db:
+            db.executemany("INSERT INTO events (user_id,name,props,created_at) VALUES (?,?,?,?)",
+                           rows)
+        return jsonify({"stored": len(rows)})
+
+    @app.get("/api/events/summary")
+    def events_summary():
+        """管理员查看近 30 天事件统计（次数 + 独立用户数）。"""
+        require_admin()
+        since = ((datetime.now(timezone.utc) - timedelta(days=EVENT_SUMMARY_DAYS))
+                 .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z")
+        with database.connect() as db:
+            rows = db.execute(
+                "SELECT name, COUNT(*) AS count, COUNT(DISTINCT user_id) AS users"
+                " FROM events WHERE created_at>=? GROUP BY name ORDER BY count DESC",
+                (since,)).fetchall()
+        return jsonify({"days": EVENT_SUMMARY_DAYS, "events": [dict(row) for row in rows]})
+
+    # ------------------------------------------------------------------
+    # 法律问题工作台：结构化案情采集 → 事项档案（分析报告 + 推荐庭审）
+    # ------------------------------------------------------------------
+    def matter_public(row, *, with_result=True) -> dict:
+        item = {
+            "id": row["id"],
+            "title": row["title"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "intake": json.loads(row["intake"] or "{}"),
+        }
+        if with_result:
+            item["result"] = json.loads(row["result"] or "null")
+            item["error"] = row["error"]
+        return item
+
+    def run_matter_analysis(matter_id: str, intake: dict):
+        """检索 → 结构化分析 → 落库，SSE 返回进度与最终报告。"""
+
+        def stream():
+            yield sse({"type": "status", "text": "正在查找相关法律…"})
+            with database.connect() as db:
+                features = _load_settings(db)
+            query = " ".join(part for part in (intake.get("what"),
+                                               intake.get("goal"),
+                                               intake.get("parties")) if part)
+            retrieval = retrieve(query, load_chunks(), fts_lookup(terms(query)),
+                                 embedder if features["vector"] else None,
+                                 limit=6, use_gate=features["jev"])
+            online_hits = (pkulaw.search(query)
+                           if features["pkulaw"] and pkulaw.configured else [])
+            evidence = qa.Evidence([*retrieval["hits"], *online_hits], query)
+            for ref in evidence.refs:
+                ref["validity"] = build_validity(
+                    ref.get("source_meta") or "", timeliness=ref.get("timeliness") or "",
+                    indexed_at=ref.get("source_indexed_at") or "")
+            yield sse({"type": "status", "text": "正在生成分析报告…"})
+            try:
+                raw = qa_llm.complete(matter_module.build_matter_messages(intake, evidence.refs),
+                                      temperature=0.15, max_tokens=3000)
+                result = matter_module.parse_matter_result(raw, evidence.refs)
+            except (LLMError, ValueError) as exc:
+                with database.connect() as db:
+                    db.execute("UPDATE matters SET status='failed', error=?, updated_at=?"
+                               " WHERE id=?", (str(exc)[:300], now_iso(), matter_id))
+                yield sse({"type": "error", "error": "报告生成失败，可稍后重试。"})
+                return
+            suggested = matter_module.match_suggested_cases(
+                result["issue_type"], result["fact_summary"], intake.get("what"))
+            with database.connect() as db:
+                db.execute("UPDATE matters SET result=?, status='ready', error='', updated_at=?"
+                           " WHERE id=?",
+                           (json.dumps({"report": result, "suggested_cases": suggested},
+                                       ensure_ascii=False), now_iso(), matter_id))
+            yield sse({"type": "result", "matter_id": matter_id,
+                       "report": result, "suggested_cases": suggested})
+
+        return Response(stream_with_context(stream()), mimetype="text/event-stream")
+
+    @app.post("/api/matters")
+    def matter_create():
+        user = user_identity(require_user())
+        if not qa_llm.configured:
+            abort(503, "智能服务暂不可用，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        try:
+            intake = matter_module.intake_from_request(data, text_value)
+        except ValueError as exc:
+            abort(400, str(exc))
+        matter_id = new_id()
+        title = (intake["what"][:24] + "…") if len(intake["what"]) > 24 else intake["what"]
+        stamp = now_iso()
+        with database.connect() as db:
+            db.execute("INSERT INTO matters (id,owner_id,title,intake,result,status,created_at,updated_at)"
+                       " VALUES (?,?,?,?,?,?,?,?)",
+                       (matter_id, user, title, json.dumps(intake, ensure_ascii=False),
+                        "", "generating", stamp, stamp))
+        return run_matter_analysis(matter_id, intake)
+
+    @app.get("/api/matters")
+    def matter_list():
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            rows = db.execute("SELECT id,title,status,created_at,updated_at,intake"
+                              " FROM matters WHERE owner_id=?"
+                              " ORDER BY updated_at DESC LIMIT 50",
+                              (identity,)).fetchall()
+        return jsonify({"matters": [matter_public(row, with_result=False)
+                                    for row in rows]})
+
+    @app.get("/api/matters/<matter_id>")
+    def matter_detail(matter_id):
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            row = db.execute("SELECT * FROM matters WHERE id=? AND owner_id=?",
+                             (matter_id, identity)).fetchone()
+        if not row:
+            abort(404, "事项不存在")
+        return jsonify(matter_public(row))
+
+    @app.delete("/api/matters/<matter_id>")
+    def matter_delete(matter_id):
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            deleted = db.execute("DELETE FROM matters WHERE id=? AND owner_id=?",
+                                 (matter_id, identity)).rowcount
+        return jsonify({"deleted": deleted})
+
+    @app.post("/api/matters/<matter_id>/regenerate")
+    def matter_regenerate(matter_id):
+        identity = user_identity(require_user())
+        if not qa_llm.configured:
+            abort(503, "智能服务暂不可用，请稍后再试")
+        with database.connect() as db:
+            row = db.execute("SELECT id,intake FROM matters WHERE id=? AND owner_id=?",
+                             (matter_id, identity)).fetchone()
+        if not row:
+            abort(404, "事项不存在")
+        intake = json.loads(row["intake"] or "{}")
+        with database.connect() as db:
+            db.execute("UPDATE matters SET status='generating', error='', updated_at=?"
+                       " WHERE id=?", (now_iso(), matter_id))
+        return run_matter_analysis(matter_id, intake)
+
+    # ------------------------------------------------------------------
+    # 知识复习闭环：庭审涉及的法条 → 标记已掌握/待复习 → 獬豸学习统计
+    # ------------------------------------------------------------------
+    @app.get("/api/knowledge")
+    def knowledge_list():
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            rows = db.execute(
+                "SELECT id,article_ref,title,case_id,status,created_at,updated_at"
+                " FROM knowledge_points WHERE owner_id=?"
+                " ORDER BY updated_at DESC LIMIT 200", (identity,)).fetchall()
+            counts = pet_knowledge_counts(db, identity)
+        return jsonify({"points": [dict(row) for row in rows], "summary": counts})
+
+    @app.post("/api/knowledge")
+    def knowledge_mark():
+        """标记一条法条为已掌握/待复习；首次掌握发放獬豸经验（按条文去重）。"""
+        user = require_user()
+        identity = user_identity(user)
+        data = request.get_json(force=True, silent=True) or {}
+        article_ref = text_value(data, "article_ref", limit=120)
+        title = text_value(data, "title", limit=120)
+        case_id = text_value(data, "case_id", limit=64)
+        status = text_value(data, "status", limit=16)
+        if not 2 <= len(article_ref) <= 120:
+            abort(400, "条文标识需为 2-120 字")
+        if case_id and case_id not in court_cases.CASES:
+            abort(400, "无效的案例标识")
+        stamp = now_iso()
+        with database.connect() as db:
+            if status == "":
+                # 再次点击当前状态 = 清除标记
+                removed = db.execute(
+                    "DELETE FROM knowledge_points WHERE owner_id=? AND article_ref=?",
+                    (identity, article_ref)).rowcount
+                return jsonify({"ok": True, "removed": removed, "pet": None})
+            if status not in ("mastered", "review"):
+                abort(400, "无效的知识点状态")
+            existing = db.execute(
+                "SELECT id FROM knowledge_points WHERE owner_id=? AND article_ref=?",
+                (identity, article_ref)).fetchone()
+            if existing:
+                db.execute("UPDATE knowledge_points SET status=?, title=?, case_id=?,"
+                           " updated_at=? WHERE id=?",
+                           (status, title or "", case_id, stamp, existing["id"]))
+                inserted = False
+            else:
+                db.execute("INSERT INTO knowledge_points"
+                           " (owner_id,article_ref,title,case_id,status,created_at,updated_at)"
+                           " VALUES (?,?,?,?,?,?,?)",
+                           (identity, article_ref, title, case_id, status, stamp, stamp))
+                inserted = True
+        pet = None
+        if inserted and status == "mastered":
+            # 同一条文反复切换状态只奖励一次：奖励按 article_ref 去重
+            pet = pet_tick(identity, "knowledge", f"knowledge:{article_ref}")
+        return jsonify({"ok": True, "first_time": inserted, "pet": pet})
+
+    @app.delete("/api/knowledge/<int:point_id>")
+    def knowledge_delete(point_id: int):
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            deleted = db.execute(
+                "DELETE FROM knowledge_points WHERE id=? AND owner_id=?",
+                (point_id, identity)).rowcount
+        return jsonify({"deleted": deleted})
+
+    # ------------------------------------------------------------------
+    # 学习地图：知识点 / 事项档案 / 庭审记录 按主题聚合的学习导航
+    # ------------------------------------------------------------------
+    LEARN_THEMES = (
+        {"key": "criminal", "name": "刑事法律", "keywords": ("刑法", "刑事诉讼", "防卫", "正当防卫")},
+        {"key": "network", "name": "网络与诈骗防范", "keywords": ("网络", "诈骗", "帮信", "个人信息",
+                                                    "数据", "诽谤", "转账", "银行卡")},
+        {"key": "contract", "name": "合同与借贷", "keywords": ("合同", "借贷", "借款", "违约", "担保")},
+        {"key": "labor", "name": "劳动就业", "keywords": ("劳动", "社保", "工伤", "工资")},
+        {"key": "family", "name": "婚姻家庭与继承", "keywords": ("婚姻", "离婚", "继承", "收养", "监护")},
+        {"key": "consumer", "name": "消费维权", "keywords": ("消费者", "消费", "食品安全", "产品")},
+        {"key": "tort", "name": "侵权责任", "keywords": ("侵权", "损害赔偿", "名誉", "隐私")},
+        {"key": "procedure", "name": "诉讼程序", "keywords": ("诉讼", "案由", "管辖", "证据规则")},
+    )
+
+    def _learn_theme_of(*texts: str) -> dict | None:
+        haystack = " ".join(str(text or "") for text in texts)
+        for theme in LEARN_THEMES:
+            if any(keyword in haystack for keyword in theme["keywords"]):
+                return theme
+        return None
+
+    @app.get("/api/learn/map")
+    def learn_map():
+        """当前账户的学习地图：主题掌握进度 + 案例轨道 + 学习建议。"""
+        identity = user_identity(require_user())
+        with database.connect() as db:
+            points = [dict(row) for row in db.execute(
+                "SELECT article_ref,title,case_id,status FROM knowledge_points"
+                " WHERE owner_id=?", (identity,)).fetchall()]
+            completed_cases = {row["case_id"] for row in db.execute(
+                "SELECT DISTINCT case_id FROM court_sessions"
+                " WHERE owner_id=? AND finished_at IS NOT NULL", (identity,)).fetchall()}
+            matter_results = [row["result"] for row in db.execute(
+                "SELECT result FROM matters WHERE owner_id=? AND status='ready'",
+                (identity,)).fetchall()]
+        themes: dict[str, dict] = {}
+        fallback = {"key": "other", "name": "其他", "mastered": 0, "review": 0,
+                    "matters": 0, "cases": [], "points": []}
+
+        def theme_bucket(theme):
+            return themes.setdefault(theme["key"], {**theme,
+                                                    "mastered": 0, "review": 0,
+                                                    "matters": 0, "cases": [], "points": []})
+
+        for point in points:
+            case = court_cases.CASES.get(point["case_id"]) if point["case_id"] else None
+            # 条文号通常不含主题词，title（案例名/语义描述）参与匹配
+            theme = (_learn_theme_of(case["theme"] if case else "",
+                                     point["title"], point["article_ref"])
+                     or fallback)
+            bucket = theme_bucket(theme)
+            bucket["mastered" if point["status"] == "mastered" else "review"] += 1
+            bucket["points"].append({"article_ref": point["article_ref"],
+                                     "status": point["status"]})
+        for raw in matter_results:
+            try:
+                issue_type = (json.loads(raw or "null") or {}).get("report", {}).get("issue_type", "")
+            except ValueError:
+                continue
+            theme = _learn_theme_of(issue_type) or fallback
+            theme_bucket(theme)["matters"] += 1
+        for case_id, case in court_cases.CASES.items():
+            theme = _learn_theme_of(case["theme"], case["title"], case["charge"]) or fallback
+            bucket = theme_bucket(theme)
+            bucket["cases"].append({
+                "case_id": case_id, "title": case["title"], "theme": case["theme"],
+                "laws_count": len(case["laws"]),
+                "completed": case_id in completed_cases,
+            })
+        # 只保留有内容或含案例轨道的主题；案例轨道按主题归位后排序展示
+        ordered = []
+        for bucket in list(themes.values()) + [fallback]:
+            if bucket["mastered"] or bucket["review"] or bucket["matters"] or bucket["cases"]:
+                if bucket not in ordered:
+                    bucket["points"] = bucket["points"][:12]
+                    ordered.append(bucket)
+        ordered.sort(key=lambda item: (-(item["mastered"] + item["review"] + item["matters"]),
+                                       item["key"]))
+        return jsonify({
+            "summary": {
+                "mastered": sum(point["status"] == "mastered" for point in points),
+                "review": sum(point["status"] == "review" for point in points),
+                "matters": len(matter_results),
+                "courts_done": len(completed_cases & set(court_cases.CASES)),
+                "cases_total": len(court_cases.CASES),
+            },
+            "themes": ordered,
+        })
 
     @app.post("/api/ask")
     def ask():
@@ -863,7 +1600,7 @@ def create_app() -> Flask:
                                " VALUES (?,?,?,?,?,?)",
                                (assistant_message_id, conversation_id, "assistant", payload["content"],
                                 json.dumps({"grounded": False}), now_iso()))
-                yield sse({"type": "result", **payload})
+                yield sse({"type": "result", "message_id": assistant_message_id, **payload})
                 return
             evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
             messages = qa.build_messages(question, evidence, previous, recent_answers)
@@ -879,6 +1616,10 @@ def create_app() -> Flask:
                 return
             result = qa.sanitize_citations("".join(buffer), evidence.valid_labels)
             citations = [ref for ref in evidence.refs if ref["label"] in set(result["used"])]
+            for ref in citations:
+                ref["validity"] = build_validity(
+                    ref.get("source_meta") or "", timeliness=ref.get("timeliness") or "",
+                    indexed_at=ref.get("source_indexed_at") or "")
             notice = ("回答参考本地知识库与北大法宝在线检索（在线条目附原文链接）；均以官方发布文本为准，不构成法律意见。"
                       if online_hits else
                       "回答仅参考本次检索到的知识库片段，以官方发布文本为准；不构成法律意见。")
@@ -906,7 +1647,8 @@ def create_app() -> Flask:
                 if remember_pet and pet["gained"]:
                     pet_remember(identity, reward_event_id,
                                  question, result["content"])
-            yield sse({"type": "result", "content": result["content"], "citations": citations,
+            yield sse({"type": "result", "message_id": assistant_message_id,
+                       "content": result["content"], "citations": citations,
                        "grounded": bool(result["used"]), "notice": notice,
                        "backend": backend, "conversation_id": conversation_id, "pet": pet})
 
@@ -958,6 +1700,17 @@ def create_app() -> Flask:
         view = court_cases.public_case(case)
         view["has_video"] = court_cases.video_path(case) is not None
         return jsonify(view)
+
+    @app.post("/api/court/suggest")
+    def court_suggest():
+        """按问题文本推荐可练手的内置案例（问答/工作台 → 庭审直连）。"""
+        require_user()
+        data = request.get_json(force=True, silent=True) or {}
+        text = text_value(data, "text", limit=MAX_QUESTION)
+        if len(text) < 2:
+            return jsonify({"cases": []})
+        suggested = matter_module.match_suggested_cases(text, text)
+        return jsonify({"cases": suggested})
 
     @app.get("/api/court/cases/<case_id>/video")
     def court_case_video(case_id):
@@ -1096,6 +1849,8 @@ def create_app() -> Flask:
             years = max(low, min(high, years))
         valid_ids = {e["id"] for e in case["dossier"]}
         marks = [m for m in (data.get("marks") or []) if m in valid_ids][:8]
+        reasoning = text_value(data, "reasoning",
+                               limit=court_scoring.MAX_REASONING_CHARS)
         deliberation = {"option_id": option_id, "label": option["label"],
                         "years": years, "convict": bool(option.get("convict")),
                         "marks": marks}
@@ -1103,18 +1858,37 @@ def create_app() -> Flask:
 
         def stream():
             analysis = ""
+            score = None
             try:
                 for event in engine.verdict_events(deliberation):
                     if event.get("type") == "result":
                         analysis = event.get("analysis", "")
+                    if event.get("type") == "verdict":
+                        # 知识复习材料：本案卷宗法条随判决下发
+                        event["knowledge"] = [{"article_ref": ref, "text": text[:400]}
+                                              for ref, text in case["laws"].items()]
                     yield sse(event)
+                # 说理评分：附加体验，失败静默跳过，不影响主链路
+                if reasoning:
+                    yield sse({"type": "status", "text": "正在评价你的说理…"})
+                    try:
+                        raw = court_llm.complete(
+                            court_scoring.build_score_messages(case, deliberation, reasoning),
+                            temperature=0.15, max_tokens=800)
+                        score = court_scoring.parse_score(raw)
+                    except LLMError:
+                        score = None
+                    if score:
+                        yield sse({"type": "reasoning_score", "score": score})
             except LLMError as exc:
                 yield sse({"type": "error", "error": str(exc)})
                 return
             with database.connect() as db:
-                db.execute("UPDATE court_sessions SET deliberation=?, analysis=?, finished_at=?"
+                db.execute("UPDATE court_sessions SET deliberation=?, analysis=?,"
+                           " reasoning_score=?, finished_at=?"
                            " WHERE id=?",
                            (json.dumps(deliberation, ensure_ascii=False), analysis,
+                            json.dumps(score, ensure_ascii=False) if score else None,
                             now_iso(), session_id))
             pet = pet_tick(identity, "court", f"court:{session_id}")
             if pet:
@@ -1172,6 +1946,8 @@ def create_app() -> Flask:
         return jsonify({
             "session_id": session_id,
             "case": court_cases.public_case(case, with_dossier=True),
+            "knowledge": [{"article_ref": ref, "text": text[:400]}
+                          for ref, text in case["laws"].items()],
             "finished_at": row["finished_at"],
             "deliberation": deliberation,
             "trajectory": [{"stage": p.get("stage"), "label": p.get("label", "")} for p in polls],
@@ -1180,6 +1956,7 @@ def create_app() -> Flask:
             "marks": [m for m in marks if any(e["id"] == m for e in case["dossier"])],
             "real_verdict": case["real_verdict"],
             "analysis": row["analysis"] or "",
+            "reasoning_score": json.loads(row["reasoning_score"] or "null"),
             "transcript": [{"role": t.get("role", ""), "name": t.get("name", ""),
                             "text": t.get("text", ""), "player": bool(t.get("player"))}
                            for t in transcript if t.get("text")],

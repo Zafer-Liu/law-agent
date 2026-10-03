@@ -130,6 +130,7 @@
       const data = await res.json();
       caseData = Object.assign({ real_verdict: data.real_verdict }, data.case);
       currentCaseId = data.case.id;
+      window.trackEvent?.("court_review", { case_id: currentCaseId });
 
       selectEl.hidden = true;
       roleSelectEl.hidden = true;
@@ -178,6 +179,8 @@
       });
       summariesWrap.hidden = (data.summaries || []).length === 0;
       processEl.hidden = (data.transcript || []).length === 0;
+      renderReasoningScore(data.reasoning_score);
+      renderKnowledge(data.knowledge, data.case.id);
 
       document.getElementById("court-restart").textContent = "返回案件列表";
       verdictEl.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -193,6 +196,8 @@
       if (!res.ok) { toast("案例加载失败"); return; }
       caseData = await res.json();
       currentCaseId = caseId;
+      window.trackEvent?.("court_case_open", { case_id: caseId });
+      window.dispatchEvent(new CustomEvent("court:case-opened", { detail: { case_id: caseId } }));
 
       resetTrialState();
       selectedRole = "";
@@ -239,6 +244,10 @@
     checkpointPanel.hidden = true;
     checkpointPanel.innerHTML = "";
     logList.innerHTML = "";
+    const knowledgeWrap = document.getElementById("knowledge-review");
+    if (knowledgeWrap) knowledgeWrap.hidden = true;
+    const scoreWrap = document.getElementById("reasoning-score");
+    if (scoreWrap) scoreWrap.hidden = true;
     speechName.textContent = "审判长";
     speechBadge.textContent = "审";
     speechTextEl.textContent = "法槌即将落下，庭审马上开始…";
@@ -273,6 +282,7 @@
     playerRoleBadge.textContent = "你的角色 · " + roleMeta[selectedRole].name;
     applyPlayerRole();
     buildDossierPanel();
+    window.trackEvent?.("court_start", { case_id: currentCaseId, role: selectedRole });
     startTrial(currentCaseId);
   });
 
@@ -824,6 +834,8 @@
   function showDeliberation(options) {
     trialEl.hidden = true;
     deliberationEl.hidden = false;
+    const reasoningEl = document.getElementById("deliberation-reasoning");
+    if (reasoningEl) reasoningEl.value = "";
     const isJuror = selectedRole === "juror";
     const isAudience = selectedRole === "audience";
     document.getElementById("deliberation-title").textContent = isJuror
@@ -886,6 +898,7 @@
 
     slider.addEventListener("input", () => {
       yearsDisplay.textContent = slider.value;
+      slider.setAttribute("aria-valuetext", `${slider.value} 年`);
     });
 
     // 提交评议
@@ -896,6 +909,9 @@
       if (!selectedOpt) { toast("请选择你的评议意见"); return; }
 
       const body = { option: selectedOpt.value, marks: Array.from(markedEvidence) };
+      const reasoningEl = document.getElementById("deliberation-reasoning");
+      const reasoning = reasoningEl ? reasoningEl.value.trim() : "";
+      if (reasoning.length >= 20) body.reasoning = reasoning.slice(0, 800);
       try {
         body.client_id = localStorage.getItem("faxiao_client_id") || "";
       } catch { /* 隐私模式无 localStorage，仅跳过宠物经验 */ }
@@ -933,13 +949,24 @@
             document.getElementById("verdict-reasoning").textContent = event.real.reasoning;
             document.getElementById("verdict-articles").textContent = event.real.articles.join("；");
             renderVerdictTrajectory(event);
+            renderKnowledge(event.knowledge, currentCaseId);
           } else if (event.type === "delta") {
             analysisEl.textContent += displayEvidenceNames(event.text);
+          } else if (event.type === "reasoning_score" && event.score) {
+            renderReasoningScore(event.score);
+            window.trackEvent?.("reasoning_scored", {
+              case_id: currentCaseId,
+              reasoning: Math.round((event.score.evidence + event.score.procedure
+                + event.score.reasoning) / 3),
+            });
           } else if (event.type === "error") {
             toast(event.error);
           } else if (event.type === "pet" && event.pet) {
             window.dispatchEvent(new CustomEvent("pet:pet", { detail: { pet: event.pet } }));
           }
+        });
+        window.trackEvent?.("court_complete", {
+          case_id: currentCaseId, role: selectedRole || "juror",
         });
       } catch {
         toast("网络错误");
@@ -963,10 +990,179 @@
     el.hidden = false;
   }
 
+  // ---- 说理评分：证据判断 / 程序理解 / 说理完整性（判决页与复盘页共用） ----
+  const SCORE_DIMENSIONS = [
+    { key: "evidence", label: "证据判断" },
+    { key: "procedure", label: "程序理解" },
+    { key: "reasoning", label: "说理完整性" },
+  ];
+
+  function renderReasoningScore(score) {
+    const wrap = document.getElementById("reasoning-score");
+    const body = document.getElementById("reasoning-score-body");
+    if (!wrap || !body || !score) {
+      if (wrap) wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    body.replaceChildren();
+    SCORE_DIMENSIONS.forEach((dimension) => {
+      const value = Math.max(0, Math.min(10, Number(score[dimension.key]) || 0));
+      const row = document.createElement("div");
+      row.className = "score-row";
+      const label = document.createElement("span");
+      label.className = "score-label";
+      label.textContent = dimension.label;
+      const track = document.createElement("span");
+      track.className = "score-track";
+      track.setAttribute("role", "img");
+      track.setAttribute("aria-label", `${dimension.label}：${value} / 10 分`);
+      const fill = document.createElement("span");
+      fill.className = `score-fill level-${value >= 8 ? "high" : value >= 6 ? "mid" : "low"}`;
+      fill.style.width = `${value * 10}%`;
+      track.appendChild(fill);
+      const number = document.createElement("span");
+      number.className = "score-number";
+      number.textContent = `${value}/10`;
+      row.append(label, track, number);
+      body.appendChild(row);
+    });
+    if (score.overall) {
+      const overall = document.createElement("p");
+      overall.className = "score-overall";
+      overall.textContent = `总评：${score.overall}`;
+      body.appendChild(overall);
+    }
+    if (score.improvement) {
+      const tip = document.createElement("p");
+      tip.className = "score-improvement";
+      tip.textContent = `建议：${score.improvement}`;
+      body.appendChild(tip);
+    }
+  }
+
+  // ---- 知识复习：把本案法条标记为已掌握/待复习（联动獬豸学习统计） ----
+  let knowledgeStatusCache = null;
+
+  async function fetchKnowledgeStatus() {
+    if (knowledgeStatusCache) return knowledgeStatusCache;
+    try {
+      const res = await fetch("/api/knowledge");
+      if (!res.ok) throw new Error("knowledge request failed");
+      const data = await res.json();
+      knowledgeStatusCache = {
+        map: new Map((data.points || []).map((point) => [point.article_ref, point.status])),
+        summary: data.summary || { mastered: 0, review: 0 },
+      };
+    } catch {
+      knowledgeStatusCache = { map: new Map(), summary: { mastered: 0, review: 0 } };
+    }
+    return knowledgeStatusCache;
+  }
+
+  async function renderKnowledge(knowledge, caseId) {
+    const wrap = document.getElementById("knowledge-review");
+    const cardsEl = document.getElementById("knowledge-cards");
+    const summaryEl = document.getElementById("knowledge-summary");
+    if (!wrap || !cardsEl || !Array.isArray(knowledge) || !knowledge.length) {
+      if (wrap) wrap.hidden = true;
+      return;
+    }
+    const { map, summary } = await fetchKnowledgeStatus();
+    wrap.hidden = false;
+    cardsEl.replaceChildren();
+    knowledge.forEach((item) => {
+      const status = map.get(item.article_ref) || "";
+      const card = document.createElement("article");
+      card.className = "knowledge-card";
+      const head = document.createElement("div");
+      head.className = "knowledge-card-head";
+      const ref = document.createElement("strong");
+      ref.textContent = item.article_ref;
+      head.appendChild(ref);
+      const actions = document.createElement("div");
+      actions.className = "knowledge-actions";
+      const mastered = document.createElement("button");
+      mastered.type = "button";
+      mastered.className = "knowledge-btn mastered";
+      mastered.textContent = "已掌握";
+      mastered.setAttribute("aria-pressed", String(status === "mastered"));
+      const review = document.createElement("button");
+      review.type = "button";
+      review.className = "knowledge-btn review";
+      review.textContent = "待复习";
+      review.setAttribute("aria-pressed", String(status === "review"));
+      actions.append(mastered, review);
+      head.appendChild(actions);
+      card.appendChild(head);
+      const text = document.createElement("p");
+      text.className = "knowledge-text";
+      text.textContent = item.text || "";
+      card.appendChild(text);
+      const mark = (next) => markKnowledge(item, next, caseId,
+        { mastered, review, summaryEl });
+      mastered.addEventListener("click", () =>
+        mark(status === "mastered" ? "" : "mastered"));
+      review.addEventListener("click", () =>
+        mark(status === "review" ? "" : "review"));
+      cardsEl.appendChild(card);
+    });
+    renderKnowledgeSummary(summaryEl, summary);
+  }
+
+  function renderKnowledgeSummary(el, summary) {
+    if (!el) return;
+    el.textContent = summary && (summary.mastered || summary.review)
+      ? `獬豸已记录：已掌握 ${summary.mastered} 条 · 待复习 ${summary.review} 条`
+      : "标记后，獬豸会按条文记录你的掌握情况。";
+  }
+
+  async function markKnowledge(item, status, caseId, ui) {
+    try {
+      const res = await fetch("/api/knowledge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          article_ref: item.article_ref,
+          title: caseData ? `${caseData.title} · ${item.article_ref}` : item.article_ref,
+          case_id: caseId || "",
+          status,
+        }),
+      });
+      if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:request-login"));
+        return;
+      }
+      if (!res.ok) throw new Error("knowledge mark failed");
+      const data = await res.json();
+      ui.mastered.setAttribute("aria-pressed", String(status === "mastered"));
+      ui.review.setAttribute("aria-pressed", String(status === "review"));
+      knowledgeStatusCache = null;  // 下次渲染重新拉取
+      const { summary } = await fetchKnowledgeStatus();
+      renderKnowledgeSummary(ui.summaryEl, summary);
+      if (data.pet && data.pet.gained) {
+        window.dispatchEvent(new CustomEvent("pet:pet", { detail: { pet: data.pet } }));
+        window.toast("獬豸记住了这条法律知识 +6 经验");
+      } else if (status === "mastered") {
+        window.toast("已标记为已掌握");
+      } else if (status === "review") {
+        window.toast("已标记为待复习");
+      } else {
+        window.toast("已清除标记");
+      }
+      window.trackEvent?.("knowledge_marked", { status: status || "cleared" });
+    } catch {
+      window.toast("标记失败，请稍后重试");
+    }
+  }
+
   // ---- 再来一局 ----
   document.getElementById("court-restart").addEventListener("click", () => {
     returnToCases();
   });
+
+  // 供其它模块（问题工作台的推荐庭审）直接打开某个案例
+  window.courtOpenCase = loadCase;
 
   document.getElementById("court-exit").addEventListener("click", () => {
     if (trialAbortController) trialAbortController.abort();

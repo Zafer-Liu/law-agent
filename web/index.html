@@ -18,8 +18,12 @@
     <nav class="tabs" role="tablist" aria-label="主要功能">
       <button id="tab-button-qa" class="tab active" data-tab="qa" role="tab"
         aria-selected="true" aria-controls="tab-qa">法律问答</button>
+      <button id="tab-button-matter" class="tab" data-tab="matter" role="tab"
+        aria-selected="false" aria-controls="tab-matter">问题工作台</button>
       <button id="tab-button-court" class="tab" data-tab="court" role="tab"
         aria-selected="false" aria-controls="tab-court">模拟法庭</button>
+      <button id="tab-button-learn" class="tab" data-tab="learn" role="tab"
+        aria-selected="false" aria-controls="tab-learn">学习地图</button>
     </nav>
     <div id="auth-area" class="auth-area"></div>
     <button id="settings-button" class="settings-button" type="button"
@@ -54,6 +58,7 @@
           <span>最近对话</span>
           <span id="conversation-total" class="conversation-total"></span>
         </div>
+        <div id="conversation-categories" class="conversation-categories" hidden></div>
         <div id="conversation-list" class="conversation-list"></div>
         <p id="conversation-empty" class="conversation-empty">还没有保存的对话</p>
       </aside>
@@ -130,6 +135,92 @@
       </aside>
     </div>
     <button id="conversation-backdrop" class="conversation-backdrop" type="button" aria-label="关闭对话历史" hidden></button>
+  </main>
+
+  <!-- ==================== 问题工作台 Tab ==================== -->
+  <main id="tab-matter" class="tab-panel matter-panel" role="tabpanel" aria-labelledby="tab-button-matter">
+    <div class="matter-workspace">
+      <aside class="matter-sidebar" aria-label="我的事项">
+        <div class="matter-sidebar-head">
+          <h2>我的事项</h2>
+          <button id="matter-new" class="new-conversation-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 4.75h14a1.25 1.25 0 0 1 1.25 1.25v10A1.25 1.25 0 0 1 19 17.25H9l-4.25 3v-14A1.25 1.25 0 0 1 5 4.75Z"/>
+              <path d="M12.5 8v6M9.5 11h6"/>
+            </svg>
+            <span>新事项</span>
+          </button>
+        </div>
+        <div id="matter-list" class="matter-list"></div>
+        <p id="matter-empty" class="conversation-empty">还没有提交过事项</p>
+      </aside>
+
+      <section class="matter-main">
+        <!-- 案情采集表单 -->
+        <div id="matter-form-view" class="matter-form-view">
+          <header class="matter-head">
+            <span class="section-kicker">问题工作台</span>
+            <h2>把事情说清楚，拿到一份可执行的处理路径</h2>
+            <p class="muted">按步骤填写案情，系统会检索现行法条，生成问题归类、事实摘要、证据清单、行动步骤与风险提醒，并推荐可以练手的模拟庭审。</p>
+          </header>
+          <form id="matter-form" class="matter-form" novalidate>
+            <label class="matter-field matter-field-wide">
+              <span>发生了什么 <small>（必填，10-2000 字）</small></span>
+              <textarea id="matter-what" rows="5" maxlength="2000" required
+                placeholder="按时间线描述事件经过：谁、做了什么、造成了什么结果。例如：我在某公司工作了 2 年，公司未提前通知即解除合同…"></textarea>
+            </label>
+            <div class="matter-field-grid">
+              <label class="matter-field">
+                <span>时间与地点</span>
+                <input id="matter-when-where" maxlength="200" autocomplete="off"
+                  placeholder="例：2026 年 8 月 · 南宁市">
+              </label>
+              <label class="matter-field">
+                <span>当事人关系</span>
+                <input id="matter-parties" maxlength="200" autocomplete="off"
+                  placeholder="例：我和用人单位 / 前室友 / 网店">
+              </label>
+              <label class="matter-field">
+                <span>涉及金额</span>
+                <input id="matter-amount" maxlength="100" autocomplete="off"
+                  placeholder="例：拖欠工资 1.8 万元">
+              </label>
+              <label class="matter-field">
+                <span>期限或紧急风险</span>
+                <input id="matter-urgent" maxlength="200" autocomplete="off"
+                  placeholder="例：仲裁时效还剩 1 个月 / 对方要求本周答复">
+              </label>
+            </div>
+            <label class="matter-field matter-field-wide">
+              <span>已有证据 <small>（可选）</small></span>
+              <textarea id="matter-evidence" rows="2" maxlength="500"
+                placeholder="例：劳动合同、工资流水、微信聊天记录、转账凭证"></textarea>
+            </label>
+            <label class="matter-field matter-field-wide">
+              <span>你的诉求 <small>（必填，2-500 字）</small></span>
+              <textarea id="matter-goal" rows="2" maxlength="500" required
+                placeholder="例：想拿回被拖欠的工资，并确认是否有经济补偿"></textarea>
+            </label>
+            <p class="matter-privacy-note">提交后生成的事项档案仅保存在你的账户名下；分析基于内置法条检索，不构成法律意见。</p>
+            <button type="submit" class="primary-btn matter-submit" id="matter-submit">生成处理路径</button>
+          </form>
+        </div>
+
+        <!-- 事项报告 -->
+        <div id="matter-result-view" class="matter-result-view" hidden>
+          <header class="matter-head">
+            <div class="matter-result-head-row">
+              <div>
+                <span class="section-kicker">事项档案</span>
+                <h2 id="matter-result-title"></h2>
+              </div>
+              <button id="matter-back-form" class="outline-btn" type="button">再提交一个事项</button>
+            </div>
+          </header>
+          <div id="matter-result-body" class="matter-result-body" aria-live="polite"></div>
+        </div>
+      </section>
+    </div>
   </main>
 
   <!-- ==================== 模拟法庭 Tab ==================== -->
@@ -293,9 +384,15 @@
       <form id="deliberation-form">
         <div id="deliberation-options" class="delib-options"></div>
         <div id="deliberation-years" class="delib-years" hidden>
-          <label>量刑建议（有期徒刑）<span id="years-display">10</span> 年</label>
-          <input type="range" id="years-slider" min="0" max="15" value="10" step="1">
-          <div class="years-range"><span id="years-min"></span><span id="years-max"></span></div>
+          <label for="years-slider">量刑建议（有期徒刑）<span id="years-display">10</span> 年</label>
+          <input type="range" id="years-slider" min="0" max="15" value="10" step="1"
+            aria-describedby="years-hint">
+          <div class="years-range" id="years-hint"><span id="years-min"></span><span id="years-max"></span></div>
+        </div>
+        <div class="delib-reasoning">
+          <label for="deliberation-reasoning">你的裁判理由 <small>（可选，20-800 字；提交后将对照真实判决评价证据判断、程序理解与说理完整性）</small></label>
+          <textarea id="deliberation-reasoning" rows="4" maxlength="800"
+            placeholder="例：我认为构成正当防卫。理由：监控（E4）显示侵害持续仅 11 秒，夺刀与追刺是连续的防卫行为；对方持刀行凶属于严重危及人身安全的暴力犯罪……"></textarea>
         </div>
         <button type="submit" class="primary-btn" id="deliberation-submit">提交评议</button>
       </form>
@@ -325,6 +422,15 @@
         <h3>审判长复盘</h3>
         <div id="analysis-content" class="analysis-content"></div>
       </div>
+      <div id="reasoning-score" class="reasoning-score" hidden>
+        <h3>说理评分 <small>对照真实判决的评价</small></h3>
+        <div id="reasoning-score-body"></div>
+      </div>
+      <div id="knowledge-review" class="knowledge-review" hidden>
+        <h3>知识复习 <small>把本案法条收进你的知识库</small></h3>
+        <p class="knowledge-summary muted" id="knowledge-summary"></p>
+        <div id="knowledge-cards" class="knowledge-cards"></div>
+      </div>
       <div id="review-process" class="review-process" hidden>
         <h3>庭审过程回顾</h3>
         <details class="review-summaries" id="review-summaries-wrap" hidden>
@@ -334,6 +440,21 @@
         <div id="review-transcript" class="review-transcript"></div>
       </div>
       <button id="court-restart" class="outline-btn">再来一局</button>
+    </div>
+  </main>
+
+  <!-- ==================== 学习地图 Tab ==================== -->
+  <main id="tab-learn" class="tab-panel learn-panel" role="tabpanel" aria-labelledby="tab-button-learn">
+    <div class="learn-wrap">
+      <header class="matter-head">
+        <span class="section-kicker">学习地图</span>
+        <h2>你的法律知识正在长成什么样子</h2>
+        <p class="muted">这里汇总你在问答、事项档案与模拟法庭中留下的学习足迹：每个主题的掌握进度、待复习的法条，以及下一步可以练手的案例。</p>
+      </header>
+
+      <div id="learn-summary" class="learn-summary" aria-live="polite"></div>
+      <div id="learn-themes" class="learn-themes"></div>
+      <p id="learn-empty" class="conversation-empty" hidden>还没有学习足迹——去问一个问题、整理一个事项，或完成一场模拟庭审吧。</p>
     </div>
   </main>
 
@@ -353,6 +474,20 @@
       <section class="settings-section" aria-label="桌面宠物">
         <h3><button class="settings-fold-btn" type="button" aria-expanded="false" aria-controls="settings-pet">桌面宠物</button></h3>
         <div id="settings-pet" class="settings-features" hidden></div>
+      </section>
+      <section class="settings-section" aria-label="回答反馈">
+        <h3>
+          <button class="settings-fold-btn" type="button" aria-expanded="false" aria-controls="settings-feedback">回答反馈</button>
+          <button id="feedback-refresh" class="logs-refresh" type="button">刷新</button>
+        </h3>
+        <div id="settings-feedback" class="settings-log" hidden></div>
+      </section>
+      <section class="settings-section" aria-label="产品事件">
+        <h3>
+          <button class="settings-fold-btn" type="button" aria-expanded="false" aria-controls="settings-events">产品事件</button>
+          <button id="events-refresh" class="logs-refresh" type="button">刷新</button>
+        </h3>
+        <div id="settings-events" class="settings-log" hidden></div>
       </section>
       <section class="settings-section" aria-label="运行日志">
         <h3>
@@ -402,7 +537,80 @@
 
   <div id="toast" class="toast" role="status" hidden></div>
 
+  <!-- ==================== 账户设置 弹窗 ==================== -->
+  <div id="account-backdrop" class="auth-backdrop" hidden></div>
+  <div id="account-modal" class="auth-modal account-modal" role="dialog" aria-modal="true"
+    aria-labelledby="account-title" hidden>
+    <header class="auth-head">
+      <h2 id="account-title">账户与数据</h2>
+      <button id="account-close" class="close-btn" type="button" aria-label="关闭账户设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
+      </button>
+    </header>
+    <div class="auth-body">
+      <p class="account-username-line">当前账户：<strong id="account-username"></strong></p>
+
+      <section class="account-section" aria-label="修改密码">
+        <h3>修改密码</h3>
+        <form id="password-form" novalidate>
+          <label class="auth-field">
+            <span>当前密码</span>
+            <input id="password-current" type="password" autocomplete="current-password"
+              maxlength="128" required>
+          </label>
+          <label class="auth-field">
+            <span>新密码（6-128 位）</span>
+            <input id="password-new" type="password" autocomplete="new-password"
+              maxlength="128" required>
+          </label>
+          <label class="auth-field">
+            <span>确认新密码</span>
+            <input id="password-confirm" type="password" autocomplete="new-password"
+              maxlength="128" required>
+          </label>
+          <p id="password-hint" class="auth-hint" hidden></p>
+          <button type="submit" class="primary-btn" id="password-submit">更新密码</button>
+        </form>
+      </section>
+
+      <section class="account-section" aria-label="我的数据">
+        <h3>我的数据</h3>
+        <p class="account-note">导出内容包含你的全部对话记录、模拟庭审评议、獬豸成长与记忆、回答反馈（JSON 文件）。</p>
+        <button type="button" class="outline-btn account-export-btn" id="account-export">导出我的数据</button>
+      </section>
+
+      <section class="account-section account-danger" aria-label="注销账号">
+        <h3>注销账号</h3>
+        <p class="account-note">将永久删除账户及名下全部数据：对话、庭审记录、獬豸成长与记忆、反馈与埋点。此操作不可恢复。</p>
+        <form id="account-delete-form" novalidate>
+          <label class="auth-field">
+            <span>输入 DELETE 确认</span>
+            <input id="account-delete-confirm" maxlength="10" autocomplete="off" required>
+          </label>
+          <label class="auth-field">
+            <span>密码</span>
+            <input id="account-delete-password" type="password" autocomplete="current-password"
+              maxlength="128" required>
+          </label>
+          <button type="submit" class="settings-danger-btn" id="account-delete-submit">永久注销并删除数据</button>
+        </form>
+      </section>
+
+      <section class="account-section account-privacy" aria-label="隐私说明">
+        <h3>隐私说明</h3>
+        <ul class="privacy-list">
+          <li>问答、庭审与獬豸数据仅保存在你自己的账户名下，其他用户不可见。</li>
+          <li>獬豸记忆仅在你主动开启后才会记录，可随时关闭并一键清空。</li>
+          <li>产品埋点只记录功能使用事件（如“完成一次庭审”），不包含你的问题内容。</li>
+          <li>你随时可以导出全部数据或注销账号；注销会删除所有个人数据。</li>
+        </ul>
+      </section>
+    </div>
+  </div>
+
   <script src="assets/app.js"></script>
+  <script src="assets/matter.js"></script>
+  <script src="assets/learn.js"></script>
   <script src="assets/pet.js"></script>
   <script src="assets/court.js"></script>
 </body>

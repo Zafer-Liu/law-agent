@@ -9,8 +9,12 @@
   // ---- 应用导航 ----
   const tabs = document.querySelectorAll(".tab");
   const panels = document.querySelectorAll(".tab-panel");
+  let activeTab = "qa";
   tabs.forEach((tab) => {
     tab.addEventListener("click", () => {
+      const next = tab.dataset.tab;
+      if (next !== activeTab) track("module_switch", { from: activeTab, to: next });
+      activeTab = next;
       tabs.forEach((t) => t.classList.remove("active"));
       panels.forEach((p) => p.classList.remove("active"));
       tabs.forEach((t) => t.setAttribute("aria-selected", "false"));
@@ -42,14 +46,18 @@
   const conversationEmpty = document.getElementById("conversation-empty");
   const conversationTotal = document.getElementById("conversation-total");
   const conversationSearch = document.getElementById("conversation-search");
+  const conversationCategories = document.getElementById("conversation-categories");
   const newConversationBtn = document.getElementById("new-conversation");
   const chatTitle = document.getElementById("chat-title");
   const welcomeTemplate = messagesEl.innerHTML;
+
+  const CATEGORY_LABELS = ["劳动", "合同", "消费", "侵权", "婚姻家庭", "刑事", "其他"];
 
   let conversationId = "";
   let sending = false;
   let conversations = [];
   let activeCitations = [];
+  let categoryFilter = "";   // "" = 全部；"__none__" = 未分类
   const clientId = getClientId();
   const PET_MEMORY_KEY = "faxiao_pet_memory_enabled";
 
@@ -72,6 +80,37 @@
   function petMemoryEnabled() {
     try { return localStorage.getItem(PET_MEMORY_KEY) === "1"; } catch { return false; }
   }
+
+  // ---- 产品事件埋点：批量、静默、不阻塞业务（需登录，未登录直接丢弃） ----
+  const EVENT_ENDPOINT = API_BASE + "/api/events";
+  const eventQueue = [];
+  let eventFlushTimer = 0;
+
+  function track(name, props = {}) {
+    if (!authUser) return;
+    eventQueue.push({ name, props });
+    if (eventQueue.length >= 10) {
+      flushEvents();
+      return;
+    }
+    if (!eventFlushTimer) eventFlushTimer = setTimeout(flushEvents, 3000);
+  }
+
+  async function flushEvents() {
+    eventFlushTimer = 0;
+    if (!eventQueue.length) return;
+    const batch = eventQueue.splice(0, 20);
+    try {
+      await fetch(EVENT_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ events: batch }),
+        keepalive: true,
+      });
+    } catch { /* 埋点失败不影响业务 */ }
+  }
+  window.trackEvent = track;
+  window.addEventListener("pagehide", flushEvents);
 
   input.addEventListener("input", () => {
     sendBtn.disabled = !input.value.trim() || sending;
@@ -104,7 +143,7 @@
     if (!(event.target instanceof Element)) return;
     const confirmButton = event.target.closest(".conversation-confirm-btn");
     if (confirmButton) {
-      if (sending) return window.toast("回答生成中，请稍候再删除对话");
+      if (sending) return window.toast("回答生成中，请稍后再删除对话");
       deleteConversation(
         confirmButton.dataset.conversationId,
         confirmButton.dataset.conversationTitle,
@@ -114,7 +153,7 @@
     }
     const deleteButton = event.target.closest(".conversation-delete-btn");
     if (deleteButton) {
-      if (sending) return window.toast("回答生成中，请稍候再删除对话");
+      if (sending) return window.toast("回答生成中，请稍后再删除对话");
       // 原位确认：本行变红，删除按钮切换为「确认删除」
       clearConversationConfirmStates(deleteButton.closest(".conversation-item"));
       const row = deleteButton.closest(".conversation-item");
@@ -123,12 +162,199 @@
       row.querySelector(".conversation-confirm-btn").hidden = false;
       return;
     }
+    const item = event.target.closest(".conversation-item");
+    if (!item || item.classList.contains("renaming")) return;
+    const id = item.dataset.conversationId;
+    if (event.target.closest(".conversation-pin-btn")) {
+      toggleConversationPin(id, item);
+      return;
+    }
+    if (event.target.closest(".conversation-rename-btn")) {
+      startConversationRename(item);
+      return;
+    }
+    if (event.target.closest(".conversation-category-btn")) {
+      toggleCategoryChoice(item);
+      return;
+    }
+    if (event.target.closest(".conversation-matter-btn")) {
+      convertConversationToMatter(id, item.dataset.conversationTitle || "对话");
+      return;
+    }
+    if (event.target.closest(".conversation-export-btn")) {
+      exportConversation(id, item.dataset.conversationTitle || "对话");
+      return;
+    }
     const openButton = event.target.closest(".conversation-item-open");
     if (!openButton) return;
-    if (sending) return window.toast("回答生成中，请稍候再切换对话");
+    if (sending) return window.toast("回答生成中，请稍后再切换对话");
     clearConversationConfirmStates();
     loadConversation(openButton.dataset.conversationId);
   });
+
+  if (conversationCategories) {
+    conversationCategories.addEventListener("click", (event) => {
+      const chip = event.target.closest(".conversation-cat-chip");
+      if (!chip) return;
+      categoryFilter = chip.dataset.value;
+      renderConversationList();
+    });
+  }
+
+  function toggleCategoryChoice(row) {
+    const existing = row.querySelector(".conversation-category-row");
+    if (existing) {
+      row.querySelector(".conversation-category-btn")?.setAttribute("aria-expanded", "false");
+      existing.remove();
+      return;
+    }
+    row.querySelector(".conversation-category-btn")?.setAttribute("aria-expanded", "true");
+    const chips = document.createElement("div");
+    chips.className = "conversation-category-row";
+    const id = row.dataset.conversationId;
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "conversation-cat-chip";
+    clear.textContent = "清除";
+    clear.setAttribute("aria-label", "清除会话分类");
+    clear.addEventListener("click", () => setConversationCategory(id, row, ""));
+    chips.appendChild(clear);
+    CATEGORY_LABELS.forEach((label) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "conversation-cat-chip";
+      chip.textContent = label;
+      chip.addEventListener("click", () => setConversationCategory(id, row, label));
+      chips.appendChild(chip);
+    });
+    row.appendChild(chips);
+  }
+
+  async function setConversationCategory(id, row, category) {
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category }),
+      });
+      if (!res.ok) throw new Error("category request failed");
+      const current = conversations.find((item) => item.id === id);
+      if (current) current.category = category || "";
+      renderConversationList();
+      window.toast(category ? `已分类为「${category}」` : "已清除分类");
+    } catch {
+      window.toast("分类保存失败，请稍后重试");
+    }
+  }
+
+  async function convertConversationToMatter(id, title) {
+    window.toast("正在从对话整理案情…");
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/conversations/${encodeURIComponent(id)}/intake`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        window.dispatchEvent(new CustomEvent("auth:request-login"));
+        return;
+      }
+      if (!res.ok) {
+        window.toast(data.error || "案情整理失败，可在工作台手动填写");
+        return;
+      }
+      document.getElementById("tab-button-matter").click();
+      window.dispatchEvent(new CustomEvent("matter:prefill", { detail: { intake: data.intake } }));
+      window.toast(`已从「${title.slice(0, 16)}」整理案情，请确认后生成处理路径`);
+    } catch {
+      window.toast("网络错误，请稍后重试");
+    }
+  }
+
+  async function toggleConversationPin(id, row) {
+    const current = conversations.find((item) => item.id === id);
+    const nextPinned = !(current && current.pinned);
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: nextPinned }),
+      });
+      if (!res.ok) throw new Error("pin request failed");
+      if (current) current.pinned = nextPinned;
+      conversations.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+      renderConversationList();
+      window.toast(nextPinned ? "已置顶" : "已取消置顶");
+    } catch {
+      window.toast("操作失败，请稍后重试");
+    }
+  }
+
+  function startConversationRename(row) {
+    if (row.classList.contains("renaming")) return;
+    const id = row.dataset.conversationId;
+    const current = conversations.find((item) => item.id === id);
+    const titleEl = row.querySelector(".conversation-item-title");
+    if (!titleEl || !current) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "conversation-rename-input";
+    input.maxLength = 60;
+    input.value = current.title;
+    input.setAttribute("aria-label", "对话标题");
+    row.classList.add("renaming");
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let settled = false;
+    const finish = async (save) => {
+      if (settled) return;
+      settled = true;
+      const value = input.value.trim();
+      if (!save || !value || value === current.title) {
+        renderConversationList();
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: value }),
+        });
+        if (!res.ok) throw new Error("rename request failed");
+        current.title = value;
+        if (conversationId === id) chatTitle.textContent = value;
+      } catch {
+        window.toast("重命名失败，请稍后重试");
+      }
+      renderConversationList();
+    };
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === "Escape") {
+        finish(false);
+      }
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  async function exportConversation(id, title) {
+    try {
+      const res = await fetch(`${API_BASE}/api/conversations/${encodeURIComponent(id)}/export`);
+      if (!res.ok) throw new Error("export request failed");
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `${title.slice(0, 40)}.md`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+      window.toast("对话已导出为 Markdown");
+    } catch {
+      window.toast("导出失败，请稍后重试");
+    }
+  }
 
   function clearConversationConfirmStates(exceptRow = null) {
     conversationList.querySelectorAll(".conversation-item.confirm-delete").forEach((row) => {
@@ -142,8 +368,10 @@
   citationsToggle.addEventListener("click", () => {
     const open = !citationsRail.classList.contains("open");
     if (open) {
-      if (activeCitations.length) showCitations(activeCitations);
-      else showSourceList();
+      if (activeCitations.length) {
+        showCitations(activeCitations);
+        track("citation_open", { via: "panel_toggle" });
+      } else showSourceList();
     }
     setCitationsOpen(open);
   });
@@ -165,6 +393,7 @@
     setAvailableCitations(citations);
     showCitations(citations);
     setCitationsOpen(true);
+    track("citation_open", { via: "inline_ref" });
     const item = citationsList.querySelector(`[data-label="${ref.dataset.label}"]`);
     if (!item) return;
     item.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -181,7 +410,6 @@
     sending = true;
     sendBtn.disabled = true;
     input.value = "";
-    const isNewConversation = !conversationId;
     if (isNewConversation) chatTitle.textContent = question.slice(0, 60);
 
     // 移除欢迎页
@@ -194,6 +422,9 @@
     stream.status("正在查找相关法律…");
     clearCitations();
     let resultEvent = null;
+    const isNewConversation = !conversationId;
+    if (isNewConversation) track("qa_ask", { new_conversation: true });
+    else track("qa_ask", { new_conversation: false });
     const requestId = crypto.randomUUID
       ? crypto.randomUUID()
       : `ask-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -245,6 +476,11 @@
           conversationId = event.conversation_id || conversationId;
           resultEvent = event;
           stream.finish(event);
+          track("answer_received", {
+            grounded: Boolean(event.grounded),
+            citations: (event.citations || []).length,
+            online: String(event.backend || "").includes("pkulaw"),
+          });
           window.dispatchEvent(new CustomEvent("pet:answer", { detail: { pet: event.pet } }));
         } else if (event.type === "error") {
           stream.fail(event.error || "暂时无法回答，请稍后再试。");
@@ -316,14 +552,20 @@
   function renderConversationList() {
     const query = conversationSearch.value.trim().toLocaleLowerCase("zh-CN");
     const filtered = conversations.filter((item) => (
-      !query || item.title.toLocaleLowerCase("zh-CN").includes(query)
-      || String(item.preview || "").toLocaleLowerCase("zh-CN").includes(query)
+      (!categoryFilter
+        || (categoryFilter === "__none__" ? !item.category : item.category === categoryFilter))
+      && (!query || item.title.toLocaleLowerCase("zh-CN").includes(query)
+      || String(item.preview || "").toLocaleLowerCase("zh-CN").includes(query))
     ));
+    renderCategoryChips();
     conversationList.replaceChildren();
     filtered.forEach((item) => {
       const row = document.createElement("div");
       row.className = "conversation-item";
       row.classList.toggle("active", item.id === conversationId);
+      row.classList.toggle("pinned", Boolean(item.pinned));
+      row.dataset.conversationId = item.id;
+      row.dataset.conversationTitle = item.title;
 
       const openButton = document.createElement("button");
       openButton.type = "button";
@@ -337,8 +579,46 @@
       const time = document.createElement("time");
       time.className = "conversation-item-time";
       time.dateTime = item.updated_at || item.created_at;
-      time.textContent = formatConversationTime(time.dateTime);
+      time.textContent = formatConversationTime(time.dateTime)
+        + (item.category ? ` · ${item.category}` : "");
       openButton.append(title, time);
+
+      const actions = document.createElement("div");
+      actions.className = "conversation-actions";
+      const pinButton = document.createElement("button");
+      pinButton.type = "button";
+      pinButton.className = "conversation-pin-btn";
+      pinButton.setAttribute("aria-pressed", String(Boolean(item.pinned)));
+      pinButton.setAttribute("aria-label",
+        item.pinned ? `取消置顶：${item.title}` : `置顶：${item.title}`);
+      pinButton.title = item.pinned ? "取消置顶" : "置顶";
+      pinButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.75h6l-.7 5.2 3 3.3H6.7l3-3.3L9 4.75Z"/><path d="M12 13.25V19.2"/></svg>';
+      const categoryButton = document.createElement("button");
+      categoryButton.type = "button";
+      categoryButton.className = "conversation-category-btn";
+      categoryButton.setAttribute("aria-label", `设置分类：${item.title}`);
+      categoryButton.setAttribute("aria-expanded", "false");
+      categoryButton.title = "设置分类";
+      categoryButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.75 6.75h14.5M4.75 12h14.5M4.75 17.25h9"/></svg>';
+      const renameButton = document.createElement("button");
+      renameButton.type = "button";
+      renameButton.className = "conversation-rename-btn";
+      renameButton.setAttribute("aria-label", `重命名：${item.title}`);
+      renameButton.title = "重命名";
+      renameButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.75 19.25h4l10-10-4-4-10 10v4Z"/><path d="m13.75 6.25 4 4"/></svg>';
+      const matterButton = document.createElement("button");
+      matterButton.type = "button";
+      matterButton.className = "conversation-matter-btn";
+      matterButton.setAttribute("aria-label", `整理成事项档案：${item.title}`);
+      matterButton.title = "整理成事项档案";
+      matterButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.75h10a1.25 1.25 0 0 1 1.25 1.25v13L12 16.5l-6.25 2.5v-13A1.25 1.25 0 0 1 7 4.75Z"/></svg>';
+      const exportButton = document.createElement("button");
+      exportButton.type = "button";
+      exportButton.className = "conversation-export-btn";
+      exportButton.setAttribute("aria-label", `导出为 Markdown：${item.title}`);
+      exportButton.title = "导出为 Markdown";
+      exportButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.75v10m0 0 3.5-3.5M12 14.75l-3.5-3.5"/><path d="M5 19.25h14"/></svg>';
+      actions.append(pinButton, categoryButton, renameButton, matterButton, exportButton);
 
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
@@ -357,12 +637,38 @@
       confirmButton.hidden = true;
       confirmButton.textContent = "确认删除";
 
-      row.append(openButton, deleteButton, confirmButton);
+      row.append(openButton, actions, deleteButton, confirmButton);
       conversationList.appendChild(row);
     });
     conversationTotal.textContent = conversations.length ? String(conversations.length) : "";
-    conversationEmpty.textContent = query ? "没有匹配的对话" : "还没有保存的对话";
+    conversationEmpty.textContent = query ? "没有匹配的对话"
+      : categoryFilter ? "该分类下还没有对话" : "还没有保存的对话";
     conversationEmpty.hidden = filtered.length > 0;
+  }
+
+  function renderCategoryChips() {
+    if (!conversationCategories) return;
+    const used = CATEGORY_LABELS.filter((label) =>
+      conversations.some((item) => item.category === label));
+    if (!used.length) {
+      conversationCategories.hidden = true;
+      conversationCategories.replaceChildren();
+      return;
+    }
+    conversationCategories.hidden = false;
+    conversationCategories.replaceChildren();
+    const make = (value, label) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "conversation-cat-chip";
+      chip.dataset.value = value;
+      chip.setAttribute("aria-pressed", String(categoryFilter === value));
+      chip.textContent = label;
+      conversationCategories.appendChild(chip);
+    };
+    make("", "全部");
+    make("__none__", "未分类");
+    used.forEach((label) => make(label, label));
   }
 
   function formatConversationTime(value) {
@@ -433,7 +739,8 @@
       (data.messages || []).forEach((message) => {
         const el = appendMessage(message.role, message.role === "user" ? message.content : "", false);
         if (message.role === "assistant") {
-          renderAnswer(el, message, { updateCitationRail: false, shouldScroll: false });
+          renderAnswer(el, { ...message, message_id: message.id },
+            { updateCitationRail: false, shouldScroll: false });
           if (message.citations && message.citations.length) latestCitations = message.citations;
         }
       });
@@ -469,9 +776,192 @@
       el.appendChild(notice);
     }
 
-    if (updateCitationRail) setAvailableCitations(el.citationRefs);
+    if (event.message_id) appendFeedbackBar(el, event.message_id, event.feedback);
+
+    if (updateCitationRail) {
+      setAvailableCitations(el.citationRefs);
+      suggestCourtForAnswer(el, event.content || "");
+    }
 
     if (shouldScroll) scrollToBottom();
+  }
+
+  // ---- 问答 → 庭审直连：回答完成后按内容推荐可练手的模拟案例 ----
+  let courtSuggestCache = new Map();
+
+  async function suggestCourtForAnswer(el, content) {
+    const text = content.slice(0, 500);
+    if (!text.trim()) return;
+    const cacheKey = text.slice(0, 60);
+    let cases = courtSuggestCache.get(cacheKey);
+    if (cases === undefined) {
+      try {
+        const res = await fetch(`${API_BASE}/api/court/suggest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) throw new Error("suggest request failed");
+        cases = (await res.json()).cases || [];
+      } catch {
+        cases = [];
+      }
+      courtSuggestCache.set(cacheKey, cases);
+      if (courtSuggestCache.size > 40) courtSuggestCache.clear();
+    }
+    if (!cases.length || !el.isConnected) return;
+    const bar = document.createElement("div");
+    bar.className = "court-suggest";
+    const label = document.createElement("span");
+    label.className = "court-suggest-label";
+    label.textContent = "用这类问题练手：";
+    bar.appendChild(label);
+    cases.forEach((suggested) => {
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "court-suggest-btn";
+      link.textContent = `${suggested.title} · ${suggested.theme}`;
+      link.addEventListener("click", () => {
+        track("qa_to_court", { case_id: suggested.case_id });
+        document.getElementById("tab-button-court").click();
+        window.courtOpenCase?.(suggested.case_id);
+      });
+      bar.appendChild(link);
+    });
+    el.appendChild(bar);
+    scrollToBottom();
+  }
+
+  // ---- 回答反馈：有帮助 / 没帮助（没帮助可选原因并补充说明） ----
+  const FEEDBACK_REASONS = [
+    { id: "inaccurate", label: "内容不准确" },
+    { id: "outdated", label: "依据过时" },
+    { id: "irrelevant", label: "答非所问" },
+    { id: "unclear", label: "看不懂" },
+    { id: "verbose", label: "太冗长" },
+    { id: "other", label: "其他" },
+  ];
+
+  function appendFeedbackBar(el, messageId, savedRating) {
+    const bar = document.createElement("div");
+    bar.className = "msg-feedback";
+    bar.dataset.messageId = messageId;
+    el.appendChild(bar);
+    if (savedRating) {
+      renderFeedbackDone(bar, savedRating, false);
+      return;
+    }
+    renderFeedbackChoice(bar);
+  }
+
+  function renderFeedbackChoice(bar) {
+    bar.replaceChildren();
+    const caption = document.createElement("span");
+    caption.className = "feedback-caption";
+    caption.textContent = "这个回答有帮助吗？";
+    const helpful = document.createElement("button");
+    helpful.type = "button";
+    helpful.className = "feedback-btn";
+    helpful.textContent = "有帮助";
+    helpful.setAttribute("aria-pressed", "false");
+    helpful.addEventListener("click", () => submitFeedback(bar, "helpful"));
+    const unhelpful = document.createElement("button");
+    unhelpful.type = "button";
+    unhelpful.className = "feedback-btn";
+    unhelpful.textContent = "没帮助";
+    unhelpful.setAttribute("aria-pressed", "false");
+    unhelpful.addEventListener("click", () => renderFeedbackForm(bar));
+    bar.append(caption, helpful, unhelpful);
+  }
+
+  function renderFeedbackForm(bar) {
+    bar.replaceChildren();
+    const form = document.createElement("form");
+    form.className = "feedback-form";
+    form.noValidate = true;
+    const caption = document.createElement("p");
+    caption.className = "feedback-form-caption";
+    caption.textContent = "没有帮助的原因是？（可补充说明）";
+    form.appendChild(caption);
+    const options = document.createElement("div");
+    options.className = "feedback-reasons";
+    options.setAttribute("role", "radiogroup");
+    options.setAttribute("aria-label", "没有帮助的原因");
+    FEEDBACK_REASONS.forEach((reason, index) => {
+      const label = document.createElement("label");
+      label.className = "feedback-reason";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `feedback-reason-${bar.dataset.messageId}`;
+      input.value = reason.id;
+      if (index === FEEDBACK_REASONS.length - 1) input.checked = true;
+      label.append(input, document.createTextNode(reason.label));
+      options.appendChild(label);
+    });
+    form.appendChild(options);
+    const textarea = document.createElement("textarea");
+    textarea.rows = 2;
+    textarea.maxLength = 200;
+    textarea.className = "feedback-comment";
+    textarea.setAttribute("aria-label", "补充说明（可选）");
+    textarea.placeholder = "补充说明（可选，200 字以内）";
+    form.appendChild(textarea);
+    const actions = document.createElement("div");
+    actions.className = "feedback-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "feedback-btn";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", () => renderFeedbackChoice(bar));
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "feedback-btn primary";
+    submit.textContent = "提交反馈";
+    actions.append(cancel, submit);
+    form.appendChild(actions);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const checked = form.querySelector("input[type=radio]:checked");
+      submitFeedback(bar, "unhelpful", checked ? checked.value : "other",
+        textarea.value.trim());
+    });
+    bar.appendChild(form);
+    options.querySelector("input")?.focus();
+  }
+
+  function renderFeedbackDone(bar, rating, allowChange = true) {
+    bar.replaceChildren();
+    const note = document.createElement("span");
+    note.className = "feedback-done";
+    note.textContent = rating === "helpful" ? "已记录：有帮助" : "已记录：没帮助";
+    bar.appendChild(note);
+    if (allowChange) {
+      const change = document.createElement("button");
+      change.type = "button";
+      change.className = "feedback-btn";
+      change.textContent = "修改";
+      change.addEventListener("click", () => renderFeedbackChoice(bar));
+      bar.appendChild(change);
+    }
+  }
+
+  async function submitFeedback(bar, rating, reason = "", comment = "") {
+    const messageId = bar.dataset.messageId;
+    const button = bar.querySelector(".feedback-btn.primary, .feedback-btn");
+    if (button) button.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_id: messageId, rating, reason, comment }),
+      });
+      if (!res.ok) throw new Error("feedback request failed");
+      renderFeedbackDone(bar, rating);
+      track("feedback_submitted", { rating, reason });
+    } catch {
+      renderFeedbackChoice(bar);
+      window.toast("反馈提交失败，请稍后重试");
+    }
   }
 
   function clearCitations() {
@@ -726,6 +1216,40 @@
     return html.replace(/\u0000(\d+)\u0000/g, (_, tokenIndex) => tokens[Number(tokenIndex)] || "");
   }
 
+  // ---- 来源效力标识：现行有效 / 已被修改 / 废止或失效 / 未确认 ----
+  const VALIDITY_CLASS = {
+    current: "ok", amended: "warn", repealed: "bad", unknown: "unknown",
+  };
+
+  function renderValidity(validity) {
+    if (!validity || !validity.status) return null;
+    const row = document.createElement("div");
+    row.className = "validity-row";
+    const badge = document.createElement("span");
+    badge.className = `validity-badge ${VALIDITY_CLASS[validity.status] || "unknown"}`;
+    badge.textContent = validity.label || "效力未确认";
+    row.appendChild(badge);
+    const bits = [];
+    if (validity.authority) bits.push(validity.authority);
+    if (validity.published) bits.push(`公布 ${validity.published}`);
+    if (validity.effective) bits.push(`施行 ${validity.effective}`);
+    if (validity.region) bits.push(validity.region === "地方" ? "适用：地方性" : "适用：全国性");
+    if (validity.document_number) bits.push(validity.document_number);
+    if (bits.length) {
+      const meta = document.createElement("span");
+      meta.className = "validity-meta";
+      meta.textContent = bits.join(" · ");
+      row.appendChild(meta);
+    }
+    if (validity.note) {
+      const note = document.createElement("p");
+      note.className = "validity-note";
+      note.textContent = validity.note;
+      row.appendChild(note);
+    }
+    return row;
+  }
+
   function showCitations(citations) {
     const displayCitations = citations.flatMap(expandLegacyCitation);
     citationsList.replaceChildren();
@@ -749,9 +1273,14 @@
           ${article ? `<strong class="article">${escapeHtml(article)}</strong>` : ""}
           ${c.url ? '<span class="citation-badge">在线</span>' : ""}
         </div>
-        <p class="citation-source">${escapeHtml(source)}${c.timeliness ? `（${escapeHtml(c.timeliness)}）` : ""}</p>
-        <p class="excerpt">${escapeHtml(c.excerpt || "暂无可展示的原文片段")}</p>
+        <p class="citation-source">${escapeHtml(source)}</p>
       `;
+      const validity = renderValidity(c.validity);
+      if (validity) item.appendChild(validity);
+      const excerpt = document.createElement("p");
+      excerpt.className = "excerpt";
+      excerpt.textContent = c.excerpt || "暂无可展示的原文片段";
+      item.appendChild(excerpt);
       if (c.url) {
         const link = document.createElement("a");
         link.className = "citation-link";
@@ -794,7 +1323,9 @@
       title.textContent = cleanCitationSource(source.title);
       const meta = document.createElement("span");
       meta.className = "kb-source-meta";
-      meta.textContent = `${source.chunk_count} 段`;
+      const validity = source.validity;
+      meta.textContent = `${source.chunk_count} 段`
+        + (validity && validity.label ? ` · ${validity.label}` : "");
       btn.append(title, meta);
       btn.addEventListener("click", () => showSourceDetail(source.id));
       item.appendChild(btn);
@@ -895,6 +1426,39 @@
     setTimeout(() => { el.hidden = true; }, 3000);
   };
 
+  // ---- 弹窗焦点管理：打开时锁定 Tab 循环，关闭后回到触发元素 ----
+  const FOCUSABLE_SELECTOR = [
+    "a[href]", "button:not([disabled])", "input:not([disabled])",
+    "select:not([disabled])", "textarea:not([disabled])",
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(",");
+
+  function trapFocus(modal) {
+    const opener = document.activeElement instanceof Element ? document.activeElement : null;
+    const onKeyDown = (event) => {
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(modal.querySelectorAll(FOCUSABLE_SELECTOR))
+        .filter((el) => el.offsetParent !== null || el === document.activeElement);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    modal.addEventListener("keydown", onKeyDown);
+    const firstField = modal.querySelector(FOCUSABLE_SELECTOR);
+    if (firstField) firstField.focus();
+    return function release() {
+      modal.removeEventListener("keydown", onKeyDown);
+      if (opener && document.contains(opener)) opener.focus();
+    };
+  }
+
   // ---- 账户体系：登录/注册/登出；未登录可浏览，写入类接口由服务端返回 401 ----
   const authArea = document.getElementById("auth-area");
   const authModal = document.getElementById("auth-modal");
@@ -922,10 +1486,14 @@
     authHint.textContent = hint;
   }
 
+  let authReleaseFocus = null;
+
   function openAuth(mode = "login", hint = "") {
     setAuthMode(mode, hint);
     authModal.hidden = false;
     authBackdrop.hidden = false;
+    if (authReleaseFocus) authReleaseFocus();
+    authReleaseFocus = trapFocus(authModal);
     authUsername.focus();
   }
 
@@ -933,14 +1501,21 @@
     authModal.hidden = true;
     authBackdrop.hidden = true;
     authPassword.value = "";
+    if (authReleaseFocus) {
+      authReleaseFocus();
+      authReleaseFocus = null;
+    }
   }
 
   function renderAuthArea() {
     authArea.replaceChildren();
     if (authUser) {
-      const chip = document.createElement("span");
-      chip.className = "auth-chip";
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "auth-chip auth-chip-btn";
       chip.textContent = authUser.username;
+      chip.setAttribute("aria-label", `打开账户设置：${authUser.username}`);
+      chip.addEventListener("click", () => openAccountModal());
       const logout = document.createElement("button");
       logout.type = "button";
       logout.className = "auth-logout";
@@ -1024,6 +1599,145 @@
     openAuth("login", (event.detail && event.detail.hint) || "");
   });
 
+  // ---- 账户与数据面板：修改密码 / 导出数据 / 注销账号 ----
+  const accountModal = document.getElementById("account-modal");
+  const accountBackdrop = document.getElementById("account-backdrop");
+  const accountClose = document.getElementById("account-close");
+  const accountUsername = document.getElementById("account-username");
+  const passwordForm = document.getElementById("password-form");
+  const passwordCurrent = document.getElementById("password-current");
+  const passwordNew = document.getElementById("password-new");
+  const passwordConfirm = document.getElementById("password-confirm");
+  const passwordHint = document.getElementById("password-hint");
+  const passwordSubmit = document.getElementById("password-submit");
+  const exportButton = document.getElementById("account-export");
+  const deleteForm = document.getElementById("account-delete-form");
+  const deleteConfirmInput = document.getElementById("account-delete-confirm");
+  const deletePasswordInput = document.getElementById("account-delete-password");
+  const deleteSubmit = document.getElementById("account-delete-submit");
+  let accountReleaseFocus = null;
+
+  function openAccountModal() {
+    if (!authUser) return;
+    accountUsername.textContent = authUser.username;
+    accountModal.hidden = false;
+    accountBackdrop.hidden = false;
+    [passwordHint].forEach((el) => { el.hidden = true; });
+    passwordForm.reset();
+    deleteForm.reset();
+    if (accountReleaseFocus) accountReleaseFocus();
+    accountReleaseFocus = trapFocus(accountModal);
+  }
+
+  function closeAccountModal() {
+    accountModal.hidden = true;
+    accountBackdrop.hidden = true;
+    if (accountReleaseFocus) {
+      accountReleaseFocus();
+      accountReleaseFocus = null;
+    }
+  }
+
+  accountClose.addEventListener("click", closeAccountModal);
+  accountBackdrop.addEventListener("click", closeAccountModal);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !accountModal.hidden) closeAccountModal();
+  });
+
+  passwordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    passwordHint.hidden = true;
+    const current = passwordCurrent.value;
+    const next = passwordNew.value;
+    if (next.length < 6) {
+      passwordHint.textContent = "新密码至少 6 位";
+      passwordHint.hidden = false;
+      return;
+    }
+    if (next !== passwordConfirm.value) {
+      passwordHint.textContent = "两次输入的新密码不一致";
+      passwordHint.hidden = false;
+      return;
+    }
+    passwordSubmit.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_password: current, new_password: next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        passwordHint.textContent = data.error || "修改失败，请重试";
+        passwordHint.hidden = false;
+        return;
+      }
+      passwordForm.reset();
+      window.toast("密码已更新，其它设备已退出登录");
+    } catch {
+      passwordHint.textContent = "网络错误，请重试";
+      passwordHint.hidden = false;
+    } finally {
+      passwordSubmit.disabled = false;
+    }
+  });
+
+  exportButton.addEventListener("click", async () => {
+    exportButton.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/account/export`);
+      if (!res.ok) throw new Error("export request failed");
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="?([^";]+)"?/);
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = match ? match[1] : "faxiao-export.json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+      track("account_export", {});
+      window.toast("数据导出已开始下载");
+    } catch {
+      window.toast("导出失败，请稍后重试");
+    } finally {
+      exportButton.disabled = false;
+    }
+  });
+
+  deleteForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (deleteConfirmInput.value.trim() !== "DELETE") {
+      window.toast("请先输入 DELETE 确认");
+      deleteConfirmInput.focus();
+      return;
+    }
+    if (!window.confirm("确定要永久注销账号并删除全部数据吗？此操作不可恢复。")) return;
+    deleteSubmit.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/account/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm: "DELETE",
+          password: deletePasswordInput.value,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.toast(data.error || "注销失败，请重试");
+        return;
+      }
+      window.toast("账号已注销，数据已删除");
+      setTimeout(() => location.reload(), 800);
+    } catch {
+      window.toast("网络错误，请重试");
+    } finally {
+      deleteSubmit.disabled = false;
+    }
+  });
+
   // ---- 设置与诊断：检索增强开关 + 运行日志 ----
   const settingsButton = document.getElementById("settings-button");
   const settingsDrawer = document.getElementById("settings-drawer");
@@ -1031,7 +1745,11 @@
   const settingsClose = document.getElementById("settings-close");
   const settingsFeatures = document.getElementById("settings-features");
   const settingsLog = document.getElementById("settings-log");
+  const settingsFeedback = document.getElementById("settings-feedback");
+  const settingsEvents = document.getElementById("settings-events");
   const logsRefresh = document.getElementById("logs-refresh");
+  const feedbackRefresh = document.getElementById("feedback-refresh");
+  const eventsRefresh = document.getElementById("events-refresh");
   const FEATURE_META = {
     vector: { title: "语义检索", desc: "向量模型参与检索排序（RRF 融合）" },
     jev: { title: "JEV 门控", desc: "检索质量门控：过滤低相关与提示注入片段" },
@@ -1046,6 +1764,8 @@
     if (open) {
       loadSettings();
       loadLogs();
+      loadFeedbackPanel();
+      loadEventsPanel();
       logsTimer = setInterval(loadLogs, 5000);
     } else if (logsTimer) {
       clearInterval(logsTimer);
@@ -1163,6 +1883,116 @@
     return notice;
   }
 
+  // ---- 管理员：回答反馈与产品事件统计 ----
+  const FEEDBACK_REASON_LABELS = {
+    inaccurate: "内容不准确", outdated: "依据过时", irrelevant: "答非所问",
+    unclear: "看不懂", verbose: "太冗长", other: "其他",
+  };
+
+  async function loadFeedbackPanel() {
+    if (!settingsFeedback) return;
+    settingsFeedback.replaceChildren(renderSettingNotice("正在读取反馈…"));
+    try {
+      const res = await fetch(`${API_BASE}/api/feedback`);
+      if (res.status === 403) {
+        settingsFeedback.replaceChildren(renderSettingNotice("回答反馈仅管理员可查看"));
+        return;
+      }
+      if (!res.ok) throw new Error("feedback request failed");
+      const data = await res.json();
+      settingsFeedback.replaceChildren();
+      const helpful = (data.stats || {}).helpful || 0;
+      const unhelpful = (data.stats || {}).unhelpful || 0;
+      const total = helpful + unhelpful;
+      const summary = document.createElement("p");
+      summary.className = "settings-hint";
+      summary.textContent = total
+        ? `有帮助 ${helpful} · 没帮助 ${unhelpful} · 有帮助率 ${Math.round(helpful * 100 / total)}%`
+        : "还没有收到反馈";
+      settingsFeedback.appendChild(summary);
+      (data.recent || []).slice(0, 20).forEach((item) => {
+        const line = document.createElement("div");
+        line.className = "log-line feedback-line";
+        const head = document.createElement("div");
+        head.className = "feedback-line-head";
+        const tag = document.createElement("span");
+        tag.className = `feedback-tag ${item.rating === "helpful" ? "ok" : "bad"}`;
+        tag.textContent = item.rating === "helpful" ? "有帮助" : "没帮助";
+        const reason = document.createElement("span");
+        reason.className = "feedback-reason-tag";
+        reason.textContent = FEEDBACK_REASON_LABELS[item.reason] || "";
+        const time = document.createElement("span");
+        time.className = "log-time";
+        time.textContent = (item.created_at || "").replace("T", " ").slice(0, 16);
+        head.append(tag, reason, time);
+        line.appendChild(head);
+        if (item.question) {
+          const question = document.createElement("p");
+          question.className = "feedback-q";
+          question.textContent = `问：${item.question}`;
+          line.appendChild(question);
+        }
+        if (item.comment) {
+          const comment = document.createElement("p");
+          comment.className = "feedback-q";
+          comment.textContent = `用户说明：${item.comment}`;
+          line.appendChild(comment);
+        }
+        settingsFeedback.appendChild(line);
+      });
+    } catch {
+      settingsFeedback.replaceChildren(renderSettingNotice("反馈读取失败，请稍后重试"));
+    }
+  }
+
+  async function loadEventsPanel() {
+    if (!settingsEvents) return;
+    settingsEvents.replaceChildren(renderSettingNotice("正在读取事件统计…"));
+    try {
+      const res = await fetch(`${API_BASE}/api/events/summary`);
+      if (res.status === 403) {
+        settingsEvents.replaceChildren(renderSettingNotice("事件统计仅管理员可查看"));
+        return;
+      }
+      if (!res.ok) throw new Error("events summary request failed");
+      const data = await res.json();
+      settingsEvents.replaceChildren();
+      const caption = document.createElement("p");
+      caption.className = "settings-hint";
+      caption.textContent = `近 ${data.days || 30} 天关键事件（次数 · 独立用户）`;
+      settingsEvents.appendChild(caption);
+      const events = data.events || [];
+      if (!events.length) {
+        settingsEvents.appendChild(renderSettingNotice("暂无事件数据"));
+        return;
+      }
+      events.forEach((item) => {
+        const line = document.createElement("div");
+        line.className = "log-line";
+        const label = document.createElement("span");
+        label.className = "log-msg";
+        label.textContent = `${EVENT_LABELS[item.name] || item.name}：${item.count} 次 · ${item.users} 人`;
+        line.appendChild(label);
+        settingsEvents.appendChild(line);
+      });
+    } catch {
+      settingsEvents.replaceChildren(renderSettingNotice("事件统计读取失败，请稍后重试"));
+    }
+  }
+
+  const EVENT_LABELS = {
+    qa_ask: "发起提问",
+    answer_received: "收到回答",
+    citation_open: "查看法律原文",
+    feedback_submitted: "提交反馈",
+    court_case_open: "打开案例",
+    court_start: "开始庭审",
+    court_complete: "完成庭审",
+    court_review: "查看复盘",
+    module_switch: "跨模块切换",
+    account_export: "导出数据",
+  };
+
   // ---- 桌宠偏好：显示开关 + 独立的记忆授权 ----
   const settingsPet = document.getElementById("settings-pet");
   if (settingsPet) {
@@ -1257,6 +2087,8 @@
   settingsClose.addEventListener("click", () => setSettingsOpen(false));
   settingsBackdrop.addEventListener("click", () => setSettingsOpen(false));
   logsRefresh.addEventListener("click", loadLogs);
+  feedbackRefresh?.addEventListener("click", loadFeedbackPanel);
+  eventsRefresh?.addEventListener("click", loadEventsPanel);
   // 母标题折叠：三个栏目默认收起，点标题展开/收起各自的子内容
   document.querySelectorAll(".settings-fold-btn").forEach((btn) => {
     btn.addEventListener("click", () => {

@@ -438,7 +438,7 @@
     const br = badge.getBoundingClientRect();
     const pw = panel.offsetWidth, ph = panel.offsetHeight;
     const below = br.top < MARGIN + ph + 14;   // 上方放不下（留出 14px 间距）→ 放下方
-    let left = below ? br.left : br.right - pw;
+    let left = br.left + br.width / 2 - pw / 2; // 水平居中于宠物，再整体钳制在视口内
     let top = below ? br.bottom + 14 : br.top - ph - 14;
     left = Math.max(MARGIN, Math.min(left, vw - pw - MARGIN));
     top = Math.max(MARGIN, Math.min(top, vh - ph - MARGIN));
@@ -449,7 +449,7 @@
     }
     panel.style.left = `${Math.round(left)}px`;
     panel.style.top = `${Math.round(top)}px`;
-    panel.style.transformOrigin = below ? "top right" : "bottom right";
+    panel.style.transformOrigin = below ? "top center" : "bottom center";
   }
 
   function closePanel(restoreFocus = false) {
@@ -474,6 +474,9 @@
     requestAnimationFrame(() => {
       if (badge.getAttribute("aria-expanded") === "true") panel.classList.add("show");
     });
+    // 点击后徽章尺寸/位置可能变化（如精灵切换），再校正一次确保面板居中于宠物
+    requestAnimationFrame(() => placePanel());
+    setTimeout(placePanel, 60);
     fetchPet({ showLoading: true });
     ensure3D();
     setState("happy");
