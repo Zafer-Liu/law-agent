@@ -38,6 +38,7 @@ from .documents import FORMATS, parse_document, split_sections
 from .jev_gate import configured as jev_configured
 from .llm import LLMClient, LLMError
 from .pkulaw import PkulawClient
+from . import rag
 from .rag import EmbeddingClient, retrieve, terms, tokenize
 from .source_meta import build_validity, parse_source_meta
 
@@ -1578,9 +1579,20 @@ def create_app() -> Flask:
             with database.connect() as db:
                 features = _load_settings(db)
             chunks = load_chunks()
-            retrieval = retrieve(question, chunks, fts_lookup(terms(question)),
-                                 embedder if features["vector"] else None,
-                                 limit=6, use_gate=features["jev"])
+
+            def run_retrieve(query: str) -> dict:
+                return retrieve(query, chunks, fts_lookup(terms(query)),
+                                embedder if features["vector"] else None,
+                                limit=6, use_gate=features["jev"])
+
+            retrieval = run_retrieve(question)
+            # 口语问题（如"欠钱不还怎么办"）原生词法/FTS 可能整题 0 命中：
+            # 用口语→法条术语扩展后的查询兜底重试一次，仍不影响正常排序。
+            if not retrieval["hits"]:
+                expanded = rag.expand_query(question)
+                if expanded != question:
+                    retrieval = run_retrieve(expanded)
+                    LOG.info("口语兜底检索命中 %d 段（扩展查询）", len(retrieval["hits"]))
             online_hits = (pkulaw.search(question)
                            if features["pkulaw"] and pkulaw.configured else [])
             backend = retrieval["backend"] + ("+pkulaw" if online_hits else "")

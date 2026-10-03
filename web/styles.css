@@ -128,20 +128,21 @@ button:active:not(:disabled) { transform: translateY(1px); }
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .conversation-actions button:hover { background: var(--primary-light); color: var(--primary); }
 .conversation-pin-btn[aria-pressed="true"] { color: var(--accent); }
-/* "更多"弹出菜单：分类 / 重命名 / 整理事项 / 导出 */
+/* "更多"操作行：在条目内展开（与分类行同模式），避免浮层被滚动容器裁切 */
 .conversation-more-pop {
-  display: none; position: absolute; right: 4px; top: calc(100% - 2px); z-index: 30;
-  flex-direction: column; gap: 2px; padding: 4px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-  box-shadow: var(--shadow-md);
+  display: none; grid-column: 1 / -1; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px;
 }
 .conversation-item.more-open .conversation-more-pop { display: flex; }
+/* 行展开后变高，垃圾桶保持锚定在标题行右侧，不压到展开的操作行 */
+.conversation-item.more-open .conversation-delete-btn { top: 10px; transform: none; }
 .conversation-more-pop button {
-  width: 30px; height: 30px; display: grid; place-items: center; border: 0;
-  border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer;
+  min-height: 30px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 12px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--text); font-size: 12px;
+  font-family: var(--font); cursor: pointer; transition: background .15s, color .15s;
 }
-.conversation-more-pop button:hover { background: var(--primary-light); color: var(--primary); }
-.conversation-more-pop svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+.conversation-more-pop button:hover { background: var(--primary-light); color: var(--primary); border-color: #dfa49e; }
+.conversation-more-pop svg { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor;
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .conversation-more-btn svg { stroke-width: 3.4; } /* 零长度路径画圆点，需加粗描边才可见 */
 .conversation-rename-input {
@@ -168,7 +169,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item.active { background: var(--surface); color: var(--primary-dark); box-shadow: var(--shadow); }
 .conversation-item[aria-busy="true"] { opacity: .62; }
 .conversation-item-open {
-  min-width: 0; min-height: 52px; padding: 9px 6px 9px 10px; border: 0;
+  min-width: 0; min-height: 52px; padding: 9px 40px 9px 10px; border: 0;
   background: transparent; color: inherit; cursor: pointer; text-align: left;
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center;
 }

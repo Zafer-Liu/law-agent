@@ -153,7 +153,11 @@
     if (moreButton) {
       const row = moreButton.closest(".conversation-item");
       const open = !row.classList.contains("more-open");
-      row.classList.toggle("more-open", open);
+      conversationList.querySelectorAll(".conversation-item.more-open").forEach((item) => {
+        item.classList.remove("more-open");
+        item.querySelector(".conversation-more-btn")?.setAttribute("aria-expanded", "false");
+      });
+      if (open) row.classList.add("more-open");
       moreButton.setAttribute("aria-expanded", String(open));
       return;
     }
@@ -647,6 +651,16 @@
       exportButton.title = "导出为 Markdown";
       exportButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.75v10m0 0 3.5-3.5M12 14.75l-3.5-3.5"/><path d="M5 19.25h14"/></svg>';
       morePop.append(categoryButton, renameButton, matterButton, exportButton);
+      // 弹出菜单带文字标签，避免只有一排看不懂的符号
+      const popLabels = new Map([
+        [categoryButton, "设置分类"], [renameButton, "重命名"],
+        [matterButton, "整理成事项"], [exportButton, "导出 Markdown"],
+      ]);
+      popLabels.forEach((label, button) => {
+        const text = document.createElement("span");
+        text.textContent = label;
+        button.appendChild(text);
+      });
 
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
