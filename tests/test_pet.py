@@ -300,7 +300,8 @@ class PetAskIntegrationTests(unittest.TestCase):
                 "remember": True,
             }))
         self.assertFalse(result["grounded"])
-        self.assertNotIn("pet", result)
+        # 检索 0 命中也照常生成回答；无引用不得发放宠物奖励（pet 为 None）
+        self.assertIsNone(result.get("pet"))
         with database.connect() as db:
             reward_count = db.execute("SELECT COUNT(*) AS n FROM pet_reward_events").fetchone()["n"]
             memory_count = db.execute("SELECT COUNT(*) AS n FROM pet_memories").fetchone()["n"]

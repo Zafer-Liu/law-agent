@@ -1639,22 +1639,8 @@ def create_app() -> Flask:
             backend = retrieval["backend"] + ("+pkulaw" if online_hits else "")
             LOG.info("问答检索 · 本地 %d 段 · 在线 %d 段 · backend=%s",
                      len(retrieval["hits"]), len(online_hits), backend)
-            if not retrieval["hits"] and not online_hits:
-                payload = {"content": "当前知识库未检索到足以回答的依据。请换个问法或补充关键词（如具体条文、罪名、情形）；我不会编造依据。",
-                           "citations": [], "grounded": False,
-                           "conversation_id": conversation_id,
-                           "backend": retrieval["backend"]}
-                with database.connect() as db:
-                    user_message_id, assistant_message_id = new_id(), new_id()
-                    db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
-                               " VALUES (?,?,?,?,?,?)",
-                               (user_message_id, conversation_id, "user", question, "{}", now_iso()))
-                    db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
-                               " VALUES (?,?,?,?,?,?)",
-                               (assistant_message_id, conversation_id, "assistant", payload["content"],
-                                json.dumps({"grounded": False}), now_iso()))
-                yield sse({"type": "result", "message_id": assistant_message_id, **payload})
-                return
+            # 检索 0 命中不再拒答：面向普通用户仍生成完整回答
+            # （系统提示会要求标注"基于一般法律知识、无条文依据"），grounded=False。
             evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
             messages = qa.build_messages(question, evidence, previous, recent_answers,
                                          conversation_summary=summary)
@@ -1674,9 +1660,14 @@ def create_app() -> Flask:
                 ref["validity"] = build_validity(
                     ref.get("source_meta") or "", timeliness=ref.get("timeliness") or "",
                     indexed_at=ref.get("source_indexed_at") or "")
-            notice = ("回答参考本地知识库与北大法宝在线检索（在线条目附原文链接）；均以官方发布文本为准，不构成法律意见。"
-                      if online_hits else
-                      "回答仅参考本次检索到的知识库片段，以官方发布文本为准；不构成法律意见。")
+            if not retrieval["hits"] and not online_hits:
+                notice = ("本次未检索到可直接引用的条文，回答基于一般法律知识生成，"
+                          "请以官方发布文本为准；不构成法律意见。")
+            elif online_hits:
+                notice = ("回答参考本地知识库与北大法宝在线检索（在线条目附原文链接）；"
+                          "均以官方发布文本为准；不构成法律意见。")
+            else:
+                notice = "回答仅参考本次检索到的知识库片段，以官方发布文本为准；不构成法律意见。"
             if result["removed"]:
                 notice = f"已移除 {result['removed']} 处无效引用。" + notice
             elif not result["used"]:
