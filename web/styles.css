@@ -109,15 +109,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item {
   width: 100%; min-height: 52px; padding-inline-end: 2px; border-radius: 9px;
   background: transparent; color: var(--text);
-  display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; align-items: center;
   transition: background .18s, color .18s;
-  position: relative;
 }
-/* 按钮组绝对悬浮在行右端，不再挤压"打开"区域；6 个按钮在窄侧栏里曾把打开按钮挤成一条缝 */
-.conversation-actions { display: none; align-items: center; gap: 2px;
-  position: absolute; right: 42px; top: 50%; transform: translateY(-50%);
-  background: var(--surface); border-radius: 8px; padding: 0 2px;
-  box-shadow: -6px 0 8px -4px var(--surface); }
+/* 按钮组回归流式网格列：hover 显示，标题列自动收缩，不再绝对定位悬浮 */
+.conversation-actions { display: none; align-items: center; gap: 2px; grid-column: 2; }
 .conversation-item:hover .conversation-actions,
 .conversation-item:focus-within .conversation-actions { display: flex; }
 .conversation-actions button {
@@ -133,8 +129,6 @@ button:active:not(:disabled) { transform: translateY(1px); }
   display: none; grid-column: 1 / -1; flex-wrap: wrap; gap: 6px; padding: 0 4px 6px;
 }
 .conversation-item.more-open .conversation-more-pop { display: flex; }
-/* 行展开后变高，垃圾桶保持锚定在标题行右侧，不压到展开的操作行 */
-.conversation-item.more-open .conversation-delete-btn { top: 10px; transform: none; }
 .conversation-more-pop button {
   min-height: 30px; display: inline-flex; align-items: center; gap: 6px;
   padding: 0 12px; border: 1px solid var(--border); border-radius: 999px;
@@ -169,15 +163,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item.active { background: var(--surface); color: var(--primary-dark); box-shadow: var(--shadow); }
 .conversation-item[aria-busy="true"] { opacity: .62; }
 .conversation-item-open {
-  min-width: 0; min-height: 52px; padding: 9px 40px 9px 10px; border: 0;
+  min-width: 0; min-height: 52px; padding: 9px 8px 9px 10px; border: 0;
   background: transparent; color: inherit; cursor: pointer; text-align: left;
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center;
 }
 .conversation-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .conversation-item-time { color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .conversation-delete-btn {
-  width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px;
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  grid-column: 3; align-self: center;
   background: transparent; color: var(--text-muted); cursor: pointer;
   transition: background .18s, color .18s;
 }
@@ -190,9 +184,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .conversation-item.confirm-delete { background: #fef2f2; box-shadow: inset 0 0 0 1.5px #fca5a5; }
 .conversation-item.confirm-delete .conversation-item-title { color: var(--danger); }
 .conversation-confirm-btn {
-  min-height: 44px; height: 44px; margin-inline-end: 6px; padding: 0 14px; border: 0; border-radius: 8px;
-  background: var(--danger); color: #fff; font-size: 13px; font-weight: 700;
-  cursor: pointer; white-space: nowrap; font-family: var(--font); justify-self: end;
+  grid-column: 1 / -1; grid-row: 2; justify-self: end; margin: 0 4px 6px 0;
+  min-height: 34px; height: 34px; padding: 0 16px; border: 0; border-radius: 8px;
+  background: var(--danger); color: #fff; font-size: 12px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; font-family: var(--font);
 }
 .conversation-confirm-btn:hover { filter: brightness(1.08); }
 .conversation-confirm-btn:disabled { cursor: wait; opacity: .7; }
