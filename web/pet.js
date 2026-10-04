@@ -112,6 +112,7 @@
     const previous = state;
     state = next;
     badge.dataset.state = next;
+    // 立绘模式下不切换表情精灵（行内 background-image 已锁定阶段立绘）
     stateEnteredAt = performance.now();
     clearTimeout(stateTimer);
     if (previous === "sleepy" && next !== "sleepy") hideBubble();
@@ -200,9 +201,89 @@
     retryButton.hidden = kind !== "error";
   }
 
+  // ---- 阶段立绘：web/pet/stage-{0..5}.png 存在时优先于 3D 展示 ----
+  // 探测成功 → 徽章锁定该立绘（行内 background-image，优先级高于表情精灵规则），
+  // 并阻止 3D 初始化；图缺失则静默回退现有 3D / 静态精灵链路。
+  let stageArtIndex = -1;
+  let petDragging = false;          // 与拖拽块共享（pointermove 时置位）
+  const pointerAt = { x: innerWidth / 2, y: innerHeight / 2 };
+  window.addEventListener("pointermove", (e) => {
+    pointerAt.x = e.clientX; pointerAt.y = e.clientY;
+  }, { passive: true });
+
+  function probeStageArt(index) {
+    const url = `${API_BASE}/assets/pet/stage-${index}.png`;
+    const img = new Image();
+    img.onload = () => {
+      stageArtIndex = index;
+      badge.classList.add("pet-stageart");
+      badge.style.backgroundImage = `url("${url}")`;
+      startStageArtLoop();
+    };
+    img.onerror = () => {
+      if (stageArtIndex !== -1) {
+        stageArtIndex = -1;
+        badge.classList.remove("pet-stageart");
+        badge.style.backgroundImage = "";
+        badge.style.transform = "";
+      }
+    };
+    img.src = url;
+  }
+
+  // ---- 立绘活体动画：呼吸 + 视线跟随倾斜 + 眨眼压扁 + 状态动作 ----
+  // （对应原 3D 版的 breathe / look / blink / 表情，reduceMotion 时只保留静态）
+  let stageArtRAF = 0, stageArtLastFrame = 0;
+  let nextArtBlinkAt = performance.now() + 2600, artBlinkUntil = 0;
+  function startStageArtLoop() {
+    if (reduceMotion || stageArtRAF || stageArtIndex < 0) return;
+    stageArtRAF = requestAnimationFrame(stageArtFrame);
+  }
+  function stageArtFrame(now) {
+    if (stageArtIndex < 0 || root.style.display === "none") {
+      stageArtRAF = 0;
+      badge.style.transform = "";
+      return;
+    }
+    stageArtRAF = requestAnimationFrame(stageArtFrame);
+    if (now - stageArtLastFrame < 33) return;   // ~30fps，与 3D 版一致
+    stageArtLastFrame = now;
+    const t = now / 1000;
+
+    // 呼吸（sleepy 更深更慢）
+    const sleepy = state === "sleepy";
+    let s = 1 + Math.sin(t * (sleepy ? 0.8 : 1.9)) * (sleepy ? 0.045 : 0.03);
+    let rot = 0, tx = 0, ty = 0;
+
+    // 视线跟随：朝光标轻微倾斜 + 平移（拖拽中不跟）
+    if (!petDragging) {
+      const b = badge.getBoundingClientRect();
+      const dx = clamp((pointerAt.x - (b.left + b.width / 2)) / (window.innerWidth / 2), -1, 1);
+      const dy = clamp((pointerAt.y - (b.top + b.height / 2)) / (window.innerHeight / 2), -1, 1);
+      rot += dx * 3.2; tx += dx * 3; ty += dy * 2;
+    }
+
+    // 状态动作（对应 3D 表情）
+    if (state === "happy") { s *= 1 + Math.abs(Math.sin(t * 9)) * 0.06; rot += Math.sin(t * 11) * 4; }
+    else if (state === "typing") { rot += Math.sin(t * 8.5) * 5; }
+    else if (state === "thinking") { rot += Math.sin(t * 1.3) * 3; }
+    else if (sleepy) { rot += Math.sin(t * 0.7) * 1.5; }
+
+    // 眨眼：快速压扁一下
+    if (now >= nextArtBlinkAt) {
+      artBlinkUntil = now + 130;
+      nextArtBlinkAt = now + 2200 + Math.random() * 2800;
+    }
+    if (now < artBlinkUntil) s *= 0.9;
+
+    badge.style.transform =
+      `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${s.toFixed(4)})`;
+  }
+
   function renderPet(pet) {
     if (!pet) return;
     currentPet = pet;
+    probeStageArt(pet.stage_index || 0);
     chip.textContent = pet.stage_name;
     chip.parentElement.dataset.stage = pet.stage;
     badge.setAttribute("aria-label", `法晓的獬豸宠物，当前阶段${pet.stage_name}，点击查看成长`);
@@ -339,6 +420,13 @@
       void chip.offsetWidth;
       chip.classList.add("milestone");
       setTimeout(() => chip.classList.remove("milestone"), 1500);
+      // 立绘模式：进化闪光（泛白放大回弹）
+      if (stageArtIndex >= 0) {
+        badge.classList.remove("pet-stageup");
+        void badge.offsetWidth;
+        badge.classList.add("pet-stageup");
+        setTimeout(() => badge.classList.remove("pet-stageup"), 1400);
+      }
       say(`额角亮起 · 成长为「${pet.stage_name}」${gain ? ` · +${gain} 经验` : ""}`, 4800);
       return;
     }
@@ -709,7 +797,7 @@
       const dx = e.clientX - pressX, dy = e.clientY - pressY;
       if (!dragging) {
         if (Math.hypot(dx, dy) < 5) return;
-        dragging = true; suppressClick = true; dragMoved = true;
+        dragging = true; petDragging = true; suppressClick = true; dragMoved = true;
         resetButton.hidden = false;
         root.style.right = "auto";
         root.style.bottom = "auto";
@@ -723,6 +811,7 @@
     });
     const endDrag = () => {
       if (dragging) {
+        petDragging = false;
         try {
           localStorage.setItem(POSITION_KEY,
             JSON.stringify({ l: root.offsetLeft, t: root.offsetTop }));
@@ -774,59 +863,35 @@
       return mesh;
     };
 
-    const furM = toon(0xf6efe2), furLightM = toon(0xfdf8ee),
-      redM = toon(0xc8281e), redDarkM = toon(0xa81c12),
-      goldM = toon(0xe2a63d), brownM = toon(0x6b4a2f),
-      darkM = toon(0x2e2014), pinkM = toon(0xf0c9b2),
-      whiteM = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const whiteM = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const brownM = toon(0x6b4a2f), darkM = toon(0x2e2014), pinkM = toon(0xf0c9b2);
 
-    // ---- 身体（坐姿） ----
-    const pet = new THREE.Group();
-    scene.add(pet);
-    const torso = M(SP(0.55, 28), furM, 0, 0.52, 0);
-    torso.scale.set(1, 0.94, 0.96);
-    pet.add(torso);
-    pet.add(M(SP(0.4, 24), furLightM, 0, 0.46, 0.24));           // 肚皮
-    const haunchL = M(SP(0.27), furM, -0.44, 0.3, -0.08);
-    const haunchR = haunchL.clone();
-    haunchR.position.x = 0.44;
-    pet.add(haunchL, haunchR);
-    const pawL = M(SP(0.13), furLightM, -0.22, 0.13, 0.42);
-    pawL.scale.set(1, 0.72, 1.2);
-    const pawR = pawL.clone();
-    pawR.position.x = 0.22;
-    pet.add(pawL, pawR);
-    const tail = new THREE.Group();
-    tail.position.set(0, 0.58, -0.48);
-    pet.add(tail);
-    const tailFluff = M(SP(0.15, 16), redM, 0, 0.06, -0.16);
-    tailFluff.scale.set(1, 0.9, 1.3);
-    tail.add(tailFluff);
+    // ---- 形态配置：宝可梦式进化——每阶段重建轮廓 / 角型 / 鬃毛 / 配色 ----
+    // head: 头身比 | torso: [x,y,z] 体形 | horn: 角型 | side: 侧角 | ears: 耳态
+    // mane: [主色, 副色, 缩放] | fur: 毛色 | sharp: 锐利眼 | plume: 羽状尾 | pads: 肩甲
+    const STAGE_FORMS = [
+      { key: "cub",  head: 1.26, torso: [0.98, 0.90, 0.96], horn: "stub",
+        side: "none", ears: "droop", mane: [0xc8281e, 0xa81c12, 0.84],
+        fur: 0xf6efe2, sharp: false, plume: false, pads: false },
+      { key: "dawn", head: 1.10, torso: [1.00, 0.94, 1.04], horn: "spiral",
+        side: "small", ears: "up", mane: [0xc8281e, 0xa81c12, 0.94],
+        fur: 0xf6efe2, sharp: false, plume: false, pads: false },
+      { key: "keen", head: 1.00, torso: [0.92, 1.00, 0.98], horn: "straight",
+        side: "long", ears: "tall", mane: [0xd0542c, 0xa83518, 1.0],
+        fur: 0xf6efe2, sharp: true, plume: false, pads: false },
+      { key: "just", head: 0.96, torso: [1.06, 1.04, 1.00], horn: "blade",
+        side: "gold", ears: "tall", mane: [0xa81c12, 0x8f150c, 1.12],
+        fur: 0xf3ecdc, sharp: true, plume: true, pads: true },
+      { key: "sage", head: 0.96, torso: [1.10, 1.06, 1.02], horn: "crown",
+        side: "gold", ears: "tall", mane: [0xe0aa4a, 0xc9962f, 1.16],
+        fur: 0xf9f3e3, sharp: true, plume: true, pads: true },
+      { key: "luck", head: 0.98, torso: [1.14, 1.10, 1.04], horn: "grand",
+        side: "sweep", ears: "tall", mane: [0xf0c060, 0xd9a63e, 1.26],
+        fur: 0xfbf6e9, sharp: true, plume: true, pads: true },
+    ];
 
-    // ---- 头（枢轴在颈部，转头自此） ----
-    const headG = new THREE.Group();
-    headG.position.set(0, 0.98, 0.02);
-    pet.add(headG);
-    headG.add(M(SP(0.6, 32), furM, 0, 0.42, 0.04));               // 颅
-    const cheekL = M(SP(0.21, 14), furM, -0.42, 0.3, 0.26);
-    const cheekR = cheekL.clone();
-    cheekR.position.x = 0.42;
-    headG.add(cheekL, cheekR);                                     // 腮绒
-    headG.add(M(SP(0.25, 18), furLightM, 0, 0.28, 0.5));          // 口鼻
-    headG.add(M(SP(0.055, 10), darkM, 0, 0.35, 0.72));            // 鼻
+    const P = { THREE, renderer, scene, camera };
 
-    // 眼睛：眼球 + 高光，成组便于眨眼缩放与独立移动
-    function makeEye(sx) {
-      const g = new THREE.Group();
-      g.position.set(0.25 * sx, 0.55, 0.53);
-      g.add(M(SP(0.088, 16), darkM, 0, 0, 0));
-      g.add(M(SP(0.03, 10), whiteM, 0.028, 0.034, 0.062));
-      headG.add(g);
-      return g;
-    }
-    const eyeL = makeEye(-1), eyeR = makeEye(1);
-
-    // 金色螺旋独角：沿螺旋线排布渐大球体
     class Spiral extends THREE.Curve {
       getPoint(t, v) {
         const a = t * Math.PI * 5.2;
@@ -834,82 +899,242 @@
         return (v || new THREE.Vector3()).set(Math.cos(a) * r, t * 0.58, Math.sin(a) * r);
       }
     }
-    const HORN_N = 30;
-    const horn = new THREE.InstancedMesh(SP(0.05, 10), goldM, HORN_N);
-    const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(),
-      sv = new THREE.Vector3(), pv = new THREE.Vector3();
-    for (let i = 0; i < HORN_N; i++) {
-      const t = i / (HORN_N - 1);
-      new Spiral().getPoint(t, pv);
-      sv.setScalar(0.34 + t * 0.78);
-      m4.compose(pv, q0, sv);
-      horn.setMatrixAt(i, m4);
-    }
-    horn.position.set(0, 0.95, 0.26);
-    horn.rotation.x = -0.12;
-    headG.add(horn);
 
-    // 棕色侧弯角
-    function sideHorn(sx) {
-      const pts = [
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0.05 * sx, 0.12, -0.05),
-        new THREE.Vector3(0.03 * sx, 0.27, -0.2),
-      ];
-      const tube = new THREE.Mesh(
-        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 0.04, 7), brownM);
-      tube.position.set(0.52 * sx, 0.56, -0.06);
-      tube.rotation.z = -0.5 * sx;
-      headG.add(tube);
-      return tube;
-    }
-    sideHorn(-1);
-    sideHorn(1);
+    function rebuildPet(level) {
+      if (P.pet) {
+        scene.remove(P.pet);
+        P.pet.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+      }
+      const cfg = STAGE_FORMS[level];
+      // 每个形态独立配色材质，避免发光/换色跨阶段串色
+      const furM = toon(cfg.fur), furLightM = toon(0xfdf8ee),
+        maneM = toon(cfg.mane[0]), maneDarkM = toon(cfg.mane[1]),
+        goldM = toon(0xe2a63d), eyeM = toon(0x2e2014);
 
-    // 耳朵（次级摆动）
-    function makeEar(sx) {
-      const g = new THREE.Group();
-      g.position.set(0.38 * sx, 0.92, 0.02);
-      const outer = M(SP(0.12, 12), furM, 0, 0.1, 0);
-      outer.scale.set(0.7, 1.4, 0.45);
-      const inner = M(SP(0.07, 10), pinkM, 0, 0.1, 0.05);
-      inner.scale.set(0.5, 1.15, 0.28);
-      g.add(outer, inner);
-      g.rotation.z = -0.55 * sx;
-      headG.add(g);
-      return g;
-    }
-    const earL = makeEar(-1), earR = makeEar(1);
+      const pet = new THREE.Group();
+      scene.add(pet);
 
-    // 红色鬃毛围领：环 + 一圈绒球，双色交替
-    const mane = new THREE.Group();
-    mane.position.set(0, 0.04, 0);
-    headG.add(mane);
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.16, 10, 26), redM);
-    collar.rotation.x = Math.PI / 2 - 0.12;
-    collar.scale.set(1.04, 1, 0.96);
-    mane.add(collar);
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2 + 0.26;
-      const fluff = M(SP(0.17 + (i % 3) * 0.03, 12), i % 2 ? redDarkM : redM,
-        Math.cos(a) * 0.52, Math.sin(a * 2) * 0.07, Math.sin(a) * 0.5);
-      fluff.scale.set(1, 0.95, 0.85);
-      mane.add(fluff);
+      // ---- 身体（坐姿） ----
+      const torso = M(SP(0.55, 28), furM, 0, 0.52, 0);
+      torso.scale.set(cfg.torso[0], cfg.torso[1], cfg.torso[2]);
+      pet.add(torso);
+      pet.add(M(SP(0.4, 24), furLightM, 0, 0.46, 0.24));           // 肚皮
+      const haunchL = M(SP(0.27), furM, -0.44, 0.3, -0.08);
+      const haunchR = haunchL.clone();
+      haunchR.position.x = 0.44;
+      pet.add(haunchL, haunchR);
+      const pawL = M(SP(0.13), furLightM, -0.22, 0.13, 0.42);
+      pawL.scale.set(1, 0.72, 1.2);
+      const pawR = pawL.clone();
+      pawR.position.x = 0.22;
+      pet.add(pawL, pawR);
+
+      // 肩甲（执正+）：金色半球压在肩上，成年战士感
+      if (cfg.pads) {
+        const padL = M(SP(0.2, 14), goldM, -0.5, 0.72, 0.04);
+        padL.scale.set(1, 0.8, 1);
+        const padR = padL.clone();
+        padR.position.x = 0.5;
+        pet.add(padL, padR);
+      }
+
+      // 尾：幼体绒球 / 成年羽状
+      const tail = new THREE.Group();
+      tail.position.set(0, 0.58, -0.48);
+      pet.add(tail);
+      if (cfg.plume) {
+        const plume = M(new THREE.ConeGeometry(0.13, 0.55, 10), maneM, 0, 0.16, -0.3);
+        plume.rotation.x = -2.35;
+        tail.add(plume);
+        const tip = M(SP(0.09, 10), maneDarkM, 0, 0.34, -0.5);
+        tail.add(tip);
+      } else {
+        const tailFluff = M(SP(0.15 + level * 0.012, 16), maneM, 0, 0.06, -0.16);
+        tailFluff.scale.set(1, 0.9, 1.3);
+        tail.add(tailFluff);
+      }
+
+      // ---- 头（枢轴在颈部；头身比随阶段变化） ----
+      const headG = new THREE.Group();
+      headG.position.set(0, 0.98, 0.02);
+      headG.scale.setScalar(cfg.head);
+      pet.add(headG);
+      headG.add(M(SP(0.6, 32), furM, 0, 0.42, 0.04));               // 颅
+      const cheekR0 = 0.21 - level * 0.012;                          // 越长大腮绒越小
+      const cheekL = M(SP(Math.max(0.13, cheekR0), 14), furM, -0.42, 0.3, 0.26);
+      const cheekR = cheekL.clone();
+      cheekR.position.x = 0.42;
+      headG.add(cheekL, cheekR);
+      headG.add(M(SP(0.25, 18), furLightM, 0, 0.28, 0.5));          // 口鼻
+      headG.add(M(SP(0.055, 10), darkM, 0, 0.35, 0.72));            // 鼻
+
+      // 眼睛：明辨起收窄成锐利眼；独占材质便于发光
+      function makeEye(sx) {
+        const g = new THREE.Group();
+        g.position.set(0.25 * sx, 0.55, 0.53);
+        const ball = M(SP(0.088, 16), eyeM, 0, 0, 0);
+        if (cfg.sharp) ball.scale.y = 0.62;
+        g.add(ball);
+        g.add(M(SP(0.03, 10), whiteM, 0.028, cfg.sharp ? 0.01 : 0.034, 0.062));
+        headG.add(g);
+        return g;
+      }
+      const eyeL = makeEye(-1), eyeR = makeEye(1);
+
+      // ---- 独角：按阶段换角型 ----
+      let horn;
+      if (cfg.horn === "stub" || cfg.horn === "spiral") {
+        // 螺旋角：幼獬为萌芽短螺旋，启蒙长成完整螺旋
+        const short = cfg.horn === "stub";
+        const N = short ? 16 : 30;
+        horn = new THREE.InstancedMesh(SP(0.05, 10), goldM, N);
+        const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(),
+          sv = new THREE.Vector3(), pv = new THREE.Vector3();
+        for (let i = 0; i < N; i++) {
+          const t = i / (N - 1);
+          new Spiral().getPoint(t, pv);
+          if (short) { pv.y *= 0.5; pv.x *= 0.7; pv.z *= 0.7; }
+          sv.setScalar((short ? 0.3 : 0.34) + t * (short ? 0.5 : 0.78));
+          m4.compose(pv, q0, sv);
+          horn.setMatrixAt(i, m4);
+        }
+        horn.position.set(0, 0.95, 0.26);
+        horn.rotation.x = -0.12;
+      } else if (cfg.horn === "straight" || cfg.horn === "blade") {
+        // 明辨：直锥角；执正：更长更宽的剑角
+        const blade = cfg.horn === "blade";
+        horn = new THREE.Mesh(
+          new THREE.ConeGeometry(blade ? 0.082 : 0.072, blade ? 0.8 : 0.58, 12), goldM);
+        horn.position.set(0, 1.12, 0.22);
+        horn.rotation.x = -0.18;
+      } else {
+        // 神判/祥瑞：三叉王冠角——中柱 + 两侧斜角
+        horn = new THREE.Group();
+        const big = cfg.horn === "grand";
+        const center = M(new THREE.ConeGeometry(0.075, big ? 0.85 : 0.66, 12), goldM, 0, 1.14, 0.2);
+        center.rotation.x = -0.14;
+        horn.add(center);
+        for (const sx of [-1, 1]) {
+          const sideCone = M(new THREE.ConeGeometry(0.045, big ? 0.48 : 0.36, 10),
+            goldM, 0.22 * sx, 1.0, 0.14);
+          sideCone.rotation.z = -0.55 * sx;
+          sideCone.rotation.x = -0.1;
+          horn.add(sideCone);
+        }
+      }
+      headG.add(horn);
+
+      // ---- 侧弯角：幼獬无，启蒙萌芽，成年转金 ----
+      if (cfg.side !== "none") {
+        const scale = { small: 0.7, long: 1.0, gold: 1.15, sweep: 1.25 }[cfg.side];
+        const mat = (cfg.side === "gold" || cfg.side === "sweep") ? goldM : brownM;
+        for (const sx of [-1, 1]) {
+          const pts = [
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(0.05 * sx, 0.12 * scale, -0.05),
+            new THREE.Vector3((cfg.side === "sweep" ? 0.14 : 0.03) * sx,
+              0.27 * scale, -0.2 * scale),
+          ];
+          const tube = new THREE.Mesh(
+            new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 12, 0.04 * scale, 7), mat);
+          tube.position.set(0.52 * sx, 0.56, -0.06);
+          tube.rotation.z = -0.5 * sx;
+          headG.add(tube);
+        }
+      }
+
+      // ---- 耳朵：幼獬垂耳，此后立耳渐高 ----
+      function makeEar(sx) {
+        const g = new THREE.Group();
+        g.position.set(0.38 * sx, 0.92, 0.02);
+        const earScale = cfg.ears === "droop" ? 0.8 : cfg.ears === "tall" ? 1.2 : 1;
+        const outer = M(SP(0.12, 12), furM, 0, 0.1, 0);
+        outer.scale.set(0.7, 1.4 * earScale, 0.45);
+        const inner = M(SP(0.07, 10), pinkM, 0, 0.1, 0.05);
+        inner.scale.set(0.5, 1.15 * earScale, 0.28);
+        g.add(outer, inner);
+        g.rotation.z = (cfg.ears === "droop" ? -1.0 : -0.55) * sx;
+        headG.add(g);
+        return g;
+      }
+      const earL = makeEar(-1), earR = makeEar(1);
+
+      // ---- 鬃毛围领：环 + 绒球，配色随阶段（红 → 深红 → 金） ----
+      const mane = new THREE.Group();
+      mane.position.set(0, 0.04, 0);
+      headG.add(mane);
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.16, 10, 26), maneM);
+      collar.rotation.x = Math.PI / 2 - 0.12;
+      collar.scale.set(1.04, 1, 0.96);
+      mane.add(collar);
+      const fluffN = 12 + level;
+      for (let i = 0; i < fluffN; i++) {
+        const a = (i / fluffN) * Math.PI * 2 + 0.26;
+        const fluff = M(SP(0.17 + (i % 3) * 0.03, 12), i % 2 ? maneDarkM : maneM,
+          Math.cos(a) * 0.52, Math.sin(a * 2) * 0.07, Math.sin(a) * 0.5);
+        fluff.scale.set(1, 0.95, 0.85);
+        mane.add(fluff);
+      }
+      mane.scale.setScalar(cfg.mane[2]);
+
+      // ---- 阶段特效：金色轮廓光环与旋转光环（透明度由 applyStageAppearance 控制） ----
+      const aura = new THREE.Mesh(SP(1.02, 24), new THREE.MeshBasicMaterial({
+        color: 0xffd27a, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+      }));
+      aura.position.y = 0.62;
+      aura.visible = false;
+      pet.add(aura);
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(0.92, 0.018, 8, 48),
+        new THREE.MeshBasicMaterial({
+          color: 0xffc84d, transparent: true, opacity: 0,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+      halo.position.y = 1.05;
+      halo.rotation.x = Math.PI / 2.4;
+      halo.visible = false;
+      pet.add(halo);
+
+      Object.assign(P, {
+        pet, torso, headG, eyeL, eyeR, tail, earL, earR, horn, mane,
+        aura, halo, goldM, eyeM,
+        earBaseL: earL.rotation.z, earBaseR: earR.rotation.z,
+        level,
+      });
     }
 
-    return {
-      THREE, renderer, scene, camera,
-      pet, torso, headG, eyeL, eyeR, tail, earL, earR, horn, mane,
-      earBaseL: earL.rotation.z, earBaseR: earR.rotation.z,
-    };
+    rebuildPet(0);
+    P.rebuildPet = rebuildPet;
+    return P;
   }
 
+
+  // ---- 六阶段形态进化：切换阶段时整个模型按 STAGE_FORMS 重建 ----
   function applyStageAppearance(P, index) {
     const level = clamp(Number.isFinite(index) ? index : 0, 0, 5);
-    const bodyScale = 0.94 + level * 0.018;
-    P.pet.scale.setScalar(bodyScale);
-    P.horn.scale.setScalar(0.78 + level * 0.085);
-    P.mane.scale.setScalar(0.92 + level * 0.025);
+    if (P.level !== level && typeof P.rebuildPet === "function") P.rebuildPet(level);
+
+    // 独角金辉：启蒙起随阶段增亮
+    P.goldM.emissive.setHex(0xffc23d);
+    P.goldM.emissiveIntensity = level >= 1 ? 0.10 + (level - 1) * 0.14 : 0;
+
+    // 目光如炬：明辨起双眼泛琥珀光（eyeM 为眼睛独占材质，不影响鼻头）
+    P.eyeM.emissive.setHex(0xffb347);
+    P.eyeM.emissiveIntensity = level >= 2 ? 0.35 + (level - 2) * 0.18 : 0;
+
+    // 金色轮廓光环：执正起出现，神判/祥瑞更亮
+    const auraOn = level >= 3;
+    P.aura.visible = auraOn;
+    const auraBase = auraOn ? 0.11 + (level - 2) * 0.07 : 0;
+    P.aura.material.opacity = auraBase;
+    P.aura.material.userData.baseOpacity = auraBase;
+
+    // 旋转光环：神判浮现、祥瑞全亮
+    const haloOn = level >= 4;
+    P.halo.visible = haloOn;
+    const haloBase = level >= 5 ? 0.85 : 0.4;
+    P.halo.material.opacity = haloBase;
+    P.halo.material.userData.baseOpacity = haloBase;
   }
 
   let petScene = null;
@@ -946,6 +1171,17 @@
       let ex = 0, ey = 0;               // 眼球偏移
       let breatheAmp = 0.018, breatheSpeed = 1.7;
       let wagSpeed = 2 + stageIndex * 0.22, earFlap = 0.05, hopH = 0, squint = 1;
+
+      // 阶段特效动画：光环缓旋、金辉呼吸（基础值存 userData，避免连乘漂移）
+      if (P.halo && P.halo.visible) {
+        P.halo.rotation.z += dt * 0.55;
+        P.halo.material.opacity =
+          (P.halo.material.userData.baseOpacity || 0.4) * (0.88 + 0.12 * Math.sin(t * 2.2));
+      }
+      if (P.aura && P.aura.visible) {
+        P.aura.material.opacity =
+          (P.aura.material.userData.baseOpacity || 0.06) * (0.85 + 0.15 * Math.sin(t * 1.6));
+      }
 
       if (state === "sleepy") {
         tp = 0.5; squint = 0.06;
@@ -1027,6 +1263,7 @@
 
   function schedule3D() {
     if (idleLoadHandle || petScene || threeLoadPromise || root.style.display === "none") return;
+    if (stageArtIndex >= 0) return;   // 阶段立绘已就位，不再支付 3D 成本
     const load = () => {
       idleLoadHandle = 0;
       idleLoadKind = "";
