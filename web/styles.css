@@ -1181,6 +1181,12 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
 .matter-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px;
   flex-wrap: wrap; padding: 4px 6px; }
 .matter-footer .muted { margin: 0; font-size: 12px; }
+.matter-footer .muted + .matter-actions { flex-basis: 100%; }
+.matter-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-top: 8px; border-top: 1px solid var(--border); width: 100%; }
+.matter-actions .primary-btn, .matter-actions .outline-btn { min-height: 40px;
+  padding: 8px 18px; font-size: 13px; width: auto; display: inline-block; margin: 0; }
+.matter-actions .matter-delete { margin-left: auto; }
 .matter-delete { color: var(--danger); }
 .matter-pending { display: flex; align-items: center; gap: 10px; padding: 26px 8px;
   color: var(--text-muted); font-size: 13px; }

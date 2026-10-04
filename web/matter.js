@@ -20,6 +20,7 @@
   let matters = [];
   let submitting = false;
   let activeMatterId = "";
+  let editingMatterId = "";   // 修改案情模式：提交时走 regenerate 而非新建
 
   const INTAKE_LABELS = {
     what: "发生了什么", when_where: "时间与地点", parties: "当事人关系",
@@ -45,6 +46,45 @@
     whatInput.focus();
   }
 
+  // 修改案情：用已有 intake 预填表单，提交时对同一事项 regenerate
+  function editMatter(matterData) {
+    editingMatterId = matterData.id || activeMatterId;
+    if (!editingMatterId) return;
+    const intake = matterData.intake || {};
+    const fields = {
+      what: whatInput, goal: goalInput,
+      when_where: document.getElementById("matter-when-where"),
+      parties: document.getElementById("matter-parties"),
+      amount: document.getElementById("matter-amount"),
+      evidence: document.getElementById("matter-evidence"),
+      urgent: document.getElementById("matter-urgent"),
+    };
+    Object.entries(fields).forEach(([key, input]) => {
+      input.value = String(intake[key] || "");
+    });
+    submitBtn.disabled = whatInput.value.trim().length < 10
+      || goalInput.value.trim().length < 2;
+    activeMatterId = editingMatterId;
+    resultView.hidden = true;
+    formView.hidden = false;
+    renderMatterList();
+    whatInput.focus();
+    window.toast?.("已载入原案情，修改后重新生成将更新同一事项");
+  }
+
+  // 接着提问：带事项上下文跳到问答，预填问句开头（检索会用到这些关键词）
+  function askAboutMatter(matterId, title, factSummary) {
+    window.trackEvent?.("matter_to_qa", {});
+    document.getElementById("tab-button-qa")?.click();
+    const input = document.getElementById("qa-input");
+    if (!input) return;
+    const context = (factSummary || title || "").slice(0, 100);
+    input.value = `关于我的事项「${(title || "").slice(0, 20)}」：${context}。我想接着问：`;
+    input.dispatchEvent(new Event("input"));
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (submitting || submitBtn.disabled) return;
@@ -60,18 +100,27 @@
     submitting = true;
     submitBtn.disabled = true;
     submitBtn.textContent = "正在生成…";
-    activeMatterId = "";
+    const editingId = editingMatterId;
+    activeMatterId = editingId;
+    editingMatterId = "";
     formView.hidden = true;
     resultView.hidden = false;
-    resultTitle.textContent = "新的分析";
+    resultTitle.textContent = editingId ? "更新分析" : "新的分析";
     resultBody.replaceChildren(renderPending("正在查找相关法律…"));
     window.trackEvent?.("matter_created", {});
     try {
-      const res = await fetch(`${API_BASE}/api/matters`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(intake),
-      });
+      // 修改案情模式：对同一事项 regenerate；否则新建
+      const res = editingId
+        ? await fetch(`${API_BASE}/api/matters/${encodeURIComponent(editingId)}/regenerate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(intake),
+          })
+        : await fetch(`${API_BASE}/api/matters`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(intake),
+          });
       if (res.status === 401) {
         window.dispatchEvent(new CustomEvent("auth:request-login"));
         showForm();
@@ -427,7 +476,7 @@
       }));
     }
 
-    // 免责 + 删除
+    // 免责 + 操作（接着提问 / 修改案情 / 重新生成 / 删除）
     const footer = document.createElement("div");
     footer.className = "matter-footer";
     if (report.disclaimer) {
@@ -436,12 +485,41 @@
       note.textContent = report.disclaimer;
       footer.appendChild(note);
     }
+    const actions = document.createElement("div");
+    actions.className = "matter-actions";
+    const askBtn = document.createElement("button");
+    askBtn.type = "button";
+    askBtn.className = "primary-btn matter-ask-btn";
+    askBtn.textContent = "接着提问";
+    askBtn.addEventListener("click", () => askAboutMatter(
+      matterId, matterData && matterData.title || resultTitle.textContent,
+      report.fact_summary || ""));
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "outline-btn";
+    editBtn.textContent = "修改案情";
+    editBtn.addEventListener("click", async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/matters/${encodeURIComponent(matterId)}`);
+        if (!res.ok) throw new Error("matter detail failed");
+        editMatter(await res.json());
+      } catch {
+        window.toast("事项载入失败，请稍后重试");
+      }
+    });
+    const refreshBtn = document.createElement("button");
+    refreshBtn.type = "button";
+    refreshBtn.className = "outline-btn";
+    refreshBtn.textContent = "重新生成";
+    refreshBtn.title = "按当前案情重新检索生成报告";
+    refreshBtn.addEventListener("click", () => regenerate(matterId));
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "text-btn matter-delete";
     remove.textContent = "删除此事项";
     remove.addEventListener("click", () => deleteMatter(matterId));
-    footer.appendChild(remove);
+    actions.append(askBtn, editBtn, refreshBtn, remove);
+    footer.appendChild(actions);
     resultBody.appendChild(footer);
   }
 

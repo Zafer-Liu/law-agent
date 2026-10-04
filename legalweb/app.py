@@ -1405,9 +1405,23 @@ def create_app() -> Flask:
         if not row:
             abort(404, "事项不存在")
         intake = json.loads(row["intake"] or "{}")
-        with database.connect() as db:
-            db.execute("UPDATE matters SET status='generating', error='', updated_at=?"
-                       " WHERE id=?", (now_iso(), matter_id))
+        # 支持携带修改后的案情重新生成（不传则沿用原案情）
+        data = request.get_json(force=True, silent=True) or {}
+        if data:
+            try:
+                intake = matter_module.intake_from_request(data, text_value)
+            except ValueError as exc:
+                abort(400, str(exc))
+            title = (intake["what"][:24] + "…") if len(intake["what"]) > 24 else intake["what"]
+            with database.connect() as db:
+                db.execute("UPDATE matters SET intake=?, title=?, status='generating',"
+                           " error='', updated_at=? WHERE id=?",
+                           (json.dumps(intake, ensure_ascii=False), title,
+                            now_iso(), matter_id))
+        else:
+            with database.connect() as db:
+                db.execute("UPDATE matters SET status='generating', error='', updated_at=?"
+                           " WHERE id=?", (now_iso(), matter_id))
         return run_matter_analysis(matter_id, intake)
 
     # ------------------------------------------------------------------
