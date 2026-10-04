@@ -38,6 +38,7 @@ from .documents import FORMATS, parse_document, split_sections
 from .jev_gate import configured as jev_configured
 from .llm import LLMClient, LLMError
 from .pkulaw import PkulawClient
+from . import compaction
 from . import rag
 from .rag import EmbeddingClient, retrieve, terms, tokenize
 from .source_meta import build_validity, parse_source_meta
@@ -135,6 +136,21 @@ RETIRED_SEED_TITLES = {
     "法条 · 最高人民法院关于审理民间借贷案件适用法律若干问题的规定(2020修正)",  # 第一次修正
     "法条 · 最高人民法院关于审理民间借贷案件适用法律若干问题的规定(2020修正)(FBMCLI.3.345304)",
 }
+
+
+def _retired_key(title: str) -> str:
+    """规范化标题用于效力下架匹配：去掉 FBM 编号括注、"(1)"式副本后缀与空白。
+
+    旧库中同一文件可能以多种标题存在（带/不带 FBM 编号、"(1)" 副本、拼音 stem），
+    精确匹配会漏网，这里统一剥掉可变部分后再比对。"""
+    base = title.strip()
+    base = re.sub(r"\((?:FBM[-.]?CLI[.\d]*|[（(]\d+[)）])\)", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"[（(]\d+[)）]", "", base)          # Windows 重复下载的 "(1)" 副本
+    base = re.sub(r"\(FBM[^)]*\)", "", base, flags=re.IGNORECASE)
+    return re.sub(r"\s+", "", base)
+
+
+_RETIRED_KEYS = {_retired_key(t) for t in RETIRED_SEED_TITLES}
 
 
 def sse(payload: dict) -> str:
@@ -324,7 +340,8 @@ def builtin_documents():
         display = _doc_display_title(path)
         title = f"{category} · {display}" if category else display
         # 效力治理：文件仍保留在仓库，但废止/已被修改的文本不再进入检索
-        if title in RETIRED_SEED_TITLES:
+        # （按规范化标题匹配，拦截 FBM 编号 / "(1)" 副本等变体）
+        if _retired_key(title) in _RETIRED_KEYS or title in RETIRED_SEED_TITLES:
             continue
         # 旧版命名（文件名 stem 直接当标题）作迁移对照
         legacy = f"{category} · {path.stem}" if category else path.stem
@@ -351,6 +368,12 @@ def seed_sources(database: Database, embedder: EmbeddingClient):
     with database.connect() as db:
         for title in RETIRED_SEED_TITLES:
             db.execute("DELETE FROM sources WHERE title=?", (title,))
+        # 规范化匹配兜底：清掉 FBM 编号 / "(1)" 副本等变体命名的旧来源
+        rows = db.execute("SELECT id, title FROM sources").fetchall()
+        for row in rows:
+            if _retired_key(row["title"]) in _RETIRED_KEYS:
+                db.execute("DELETE FROM sources WHERE id=?", (row["id"],))
+                LOG.info("效力下架（规范化匹配）：%s", row["title"])
         existing = {row["title"] for row in db.execute("SELECT title FROM sources")}
     for path, title, legacy in builtin_documents():
         # 清理旧版命名的同名来源（FBM 编号 / 拼音文件名标题），避免新旧重复
@@ -1568,11 +1591,19 @@ def create_app() -> Flask:
                 db.execute("INSERT INTO conversations (id,title,owner_id,created_at)"
                            " VALUES (?,?,?,?)",
                            (conversation_id, question[:60], identity, now_iso()))
-            old = db.execute("SELECT role,content FROM messages WHERE conversation_id=?"
-                             " ORDER BY created_at DESC LIMIT 20", (conversation_id,)).fetchall()
-        previous = [row["content"] for row in reversed(old) if row["role"] == "user"][-3:]
-        recent_answers = [row["content"] for row in reversed(old)
-                          if row["role"] == "assistant"][-2:]
+            # 对话压缩：摘要覆盖前的全部历史（时间正序），交给 compaction
+            old = db.execute(
+                "SELECT role,content FROM messages WHERE conversation_id=?"
+                " ORDER BY created_at", (conversation_id,)).fetchall()
+            context_state = compaction.build_conversation_context(
+                db, conversation_id, old, qa_llm, now_iso)
+        tail = context_state["tail"]
+        summary = context_state["summary"]
+        # 近期尾部全部筛入下一轮：近 8 个用户问题 + 近 4 条回答
+        # （LLM 侧用于消解指代与延续话题，检索兜底并入追问检索词）。
+        previous = [row["content"] for row in tail if row["role"] == "user"][-8:]
+        recent_answers = [row["content"] for row in tail
+                          if row["role"] == "assistant"][-4:]
 
         def stream():
             yield sse({"type": "status", "text": "正在查找相关法律…"})
@@ -1593,6 +1624,12 @@ def create_app() -> Flask:
                 if expanded != question:
                     retrieval = run_retrieve(expanded)
                     LOG.info("口语兜底检索命中 %d 段（扩展查询）", len(retrieval["hits"]))
+            # 追问（如"我应该怎么做"）本身不含法律关键词，检索必然 0 命中：
+            # 把本会话最近的问题与上一条回答并入检索词兜底，对齐正在聊的主题。
+            if not retrieval["hits"] and previous:
+                history_query = " ".join([*previous[-3:], recent_answers[-1][:200] if recent_answers else "", question])
+                retrieval = run_retrieve(history_query)
+                LOG.info("追问兜底检索命中 %d 段（并入历史对话）", len(retrieval["hits"]))
             online_hits = (pkulaw.search(question)
                            if features["pkulaw"] and pkulaw.configured else [])
             backend = retrieval["backend"] + ("+pkulaw" if online_hits else "")
@@ -1615,7 +1652,8 @@ def create_app() -> Flask:
                 yield sse({"type": "result", "message_id": assistant_message_id, **payload})
                 return
             evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
-            messages = qa.build_messages(question, evidence, previous, recent_answers)
+            messages = qa.build_messages(question, evidence, previous, recent_answers,
+                                         conversation_summary=summary)
             yield sse({"type": "status", "text": "正在生成回答…", "backend": backend})
             buffer = []
             try:

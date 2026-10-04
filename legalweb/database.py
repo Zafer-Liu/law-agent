@@ -132,6 +132,12 @@ CREATE TABLE IF NOT EXISTS knowledge_points (
     UNIQUE(owner_id, article_ref)
 );
 CREATE INDEX IF NOT EXISTS knowledge_points_owner ON knowledge_points(owner_id, status);
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    summary TEXT NOT NULL,
+    summarized_count INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

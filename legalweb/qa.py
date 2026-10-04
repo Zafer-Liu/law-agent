@@ -132,17 +132,20 @@ class Evidence:
         return {ref["label"] for ref in self.refs}
 
 
-def build_messages(question, evidence: Evidence, previous_questions, recent_answers):
+def build_messages(question, evidence: Evidence, previous_questions, recent_answers,
+                   conversation_summary=None):
     context = {
         "question": question,
         "evidence": [{"label": ref["label"], "section": ref["section"],
                       "excerpt": ref["excerpt"]} for ref in evidence.refs],
     }
-    # 历史仅用于消解指代（"上面说的""它"），不作为新证据。
+    # 历史用于消解指代（"上面说的""它"）与延续话题，不作为新证据。
+    if conversation_summary:
+        context["earlier_conversation_summary_for_continuity_only"] = conversation_summary
     if previous_questions:
-        context["previous_questions_for_resolving_pronouns_only"] = previous_questions[-3:]
+        context["previous_questions_for_resolving_pronouns_only"] = [q[:300] for q in previous_questions[-8:]]
     if recent_answers:
-        context["recent_answer_summaries_for_continuity_only"] = [a[:400] for a in recent_answers[-2:]]
+        context["recent_answer_summaries_for_continuity_only"] = [a[:600] for a in recent_answers[-4:]]
     return [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
 
