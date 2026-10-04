@@ -143,9 +143,9 @@ def build_messages(question, evidence: Evidence, previous_questions, recent_answ
     if conversation_summary:
         context["earlier_conversation_summary_for_continuity_only"] = conversation_summary
     if previous_questions:
-        context["previous_questions_for_resolving_pronouns_only"] = [q[:300] for q in previous_questions[-8:]]
+        context["previous_questions_for_resolving_pronouns_only"] = [q[:800] for q in previous_questions[-12:]]
     if recent_answers:
-        context["recent_answer_summaries_for_continuity_only"] = [a[:600] for a in recent_answers[-4:]]
+        context["recent_answer_summaries_for_continuity_only"] = [a[:1500] for a in recent_answers[-6:]]
     return [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
 

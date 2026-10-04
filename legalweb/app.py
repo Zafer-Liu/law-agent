@@ -1601,11 +1601,11 @@ def create_app() -> Flask:
                 db, conversation_id, old, qa_llm, now_iso)
         tail = context_state["tail"]
         summary = context_state["summary"]
-        # 近期尾部全部筛入下一轮：近 8 个用户问题 + 近 4 条回答
+        # 近期尾部全部筛入下一轮：近 12 个用户问题 + 近 6 条回答
         # （LLM 侧用于消解指代与延续话题，检索兜底并入追问检索词）。
-        previous = [row["content"] for row in tail if row["role"] == "user"][-8:]
+        previous = [row["content"] for row in tail if row["role"] == "user"][-12:]
         recent_answers = [row["content"] for row in tail
-                          if row["role"] == "assistant"][-4:]
+                          if row["role"] == "assistant"][-6:]
 
         def stream():
             # 上下文条：本次组装后的摘要+尾部用量（含是否已压缩）

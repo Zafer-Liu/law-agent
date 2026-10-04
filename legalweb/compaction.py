@@ -11,10 +11,13 @@ import logging
 
 LOG = logging.getLogger(__name__)
 
+# 上下文预算：逐字保留区的 token 预算（估算 ≈3.5 字符/token）。
+# 显示口径：1k=1000 tokens。
+CONTEXT_TOKEN_BUDGET = 32_000
 # 尾部预算：最近消息的字符总量低于该值时不压缩（原样全部保留）
-TAIL_CHAR_BUDGET = 6000
+TAIL_CHAR_BUDGET = int(CONTEXT_TOKEN_BUDGET * 3.5)
 # 摘要输入上限（字符）：避免摘要请求本身过大
-MAX_SUMMARY_INPUT_CHARS = 16000
+MAX_SUMMARY_INPUT_CHARS = 48_000
 # 触发压缩的最少历史消息数（尾部预算之外的旧消息数）
 MIN_MESSAGES_FOR_COMPACT = 4
 
