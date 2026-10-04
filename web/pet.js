@@ -234,12 +234,12 @@
     }
   }
 
-  // 鼠标跟随：动画之上给宠物精灵一个轻微的朝向偏移/倾斜（不碰徽章定位）
+  // 鼠标跟随（伪 3D 转头）：透视 rotateY + 平移，光标左右移动时宠物明显转头
   const pointerAt = { x: innerWidth / 2, y: innerHeight / 2 };
   window.addEventListener("pointermove", (e) => {
     pointerAt.x = e.clientX; pointerAt.y = e.clientY;
   }, { passive: true });
-  let followRAF = 0, followLast = 0, fx = 0, fy = 0;
+  let followRAF = 0, followLast = 0, fx = 0, fy = 0, fry = 0;
   function followFrame(now) {
     followRAF = requestAnimationFrame(followFrame);
     if (now - followLast < 33) return;         // ~30fps
@@ -247,17 +247,18 @@
     const img = stageImg;
     if (!img || stageArtIndex < 0 || root.style.display === "none") return;
     const b = badge.getBoundingClientRect();
-    let tx = 0, ty = 0;
+    let tx = 0, ty = 0, ry = 0;
     if (!petDragging) {
       const dx = (pointerAt.x - (b.left + b.width / 2)) / (window.innerWidth / 2);
       const dy = (pointerAt.y - (b.top + b.height / 2)) / (window.innerHeight / 2);
-      tx = clamp(dx, -1, 1) * 3;               // 最多 3px 朝光标平移
-      ty = clamp(dy, -1, 1) * 2;
+      tx = clamp(dx, -1, 1) * 9;               // 横向最多 9px
+      ty = clamp(dy, -1, 1) * 4;
+      ry = clamp(dx, -1, 1) * 24;              // 透视转头 ±24°，肉眼明显
     }
-    // 缓动逼近，静止时回到中心
-    fx += (tx - fx) * 0.1; fy += (ty - fy) * 0.1;
-    const rot = fx * 0.5;                      // ≤1.5° 轻微倾斜
-    img.style.transform = `translate(${fx.toFixed(2)}px, ${fy.toFixed(2)}px) rotate(${rot.toFixed(2)}deg)`;
+    // 缓动逼近，静止时回正
+    fx += (tx - fx) * 0.1; fy += (ty - fy) * 0.1; fry += (ry - fry) * 0.1;
+    img.style.transform =
+      `perspective(180px) translate(${fx.toFixed(2)}px, ${fy.toFixed(2)}px) rotateY(${fry.toFixed(2)}deg)`;
   }
   if (!reduceMotion) followRAF = requestAnimationFrame(followFrame);
 
