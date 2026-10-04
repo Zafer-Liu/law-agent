@@ -11,7 +11,10 @@
       "name": "backend",
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "legalweb"],
-      "port": 8124
+      "port": 8124,
+      "env": {
+        "LAW_PKULAW_TOKEN": "1b7782e8-a198-3a43-ae6f-800dfd75508e"
+      }
     }
   ]
 }
