@@ -1026,8 +1026,10 @@ def create_app() -> Flask:
             if item["role"] == "assistant" and item["id"] in ratings:
                 item["feedback"] = ratings[item["id"]]
             rendered.append(item)
+        with database.connect() as db:
+            context = compaction.estimate_context_state(db, conversation_id)
         return jsonify({"conversation": {"id": row["id"], "title": row["title"]},
-                        "messages": rendered})
+                        "messages": rendered, "context": context})
 
     @app.delete("/api/conversations/<conversation_id>")
     def conversation_delete(conversation_id):
@@ -1606,6 +1608,8 @@ def create_app() -> Flask:
                           if row["role"] == "assistant"][-4:]
 
         def stream():
+            # 上下文条：本次组装后的摘要+尾部用量（含是否已压缩）
+            yield sse({"type": "context", **context_state["stats"]})
             yield sse({"type": "status", "text": "正在查找相关法律…"})
             with database.connect() as db:
                 features = _load_settings(db)

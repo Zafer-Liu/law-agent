@@ -84,12 +84,51 @@ def load_tail(rows, budget: int = TAIL_CHAR_BUDGET):
     return start, used
 
 
+def context_stats(summary, tail) -> dict:
+    """前端上下文条的数据：字符与估算 token（中文约 3.5 字符/token）。"""
+    summary_chars = len(summary or "")
+    tail_chars = sum(len(row["content"] or "") for row in tail)
+    total_chars = summary_chars + tail_chars
+    return {
+        "summary_chars": summary_chars,
+        "tail_chars": tail_chars,
+        "budget": TAIL_CHAR_BUDGET,
+        "total_chars": total_chars,
+        "tokens_est": int(total_chars / 3.5),
+        "budget_tokens": int(TAIL_CHAR_BUDGET / 3.5),
+        "compacted": bool(summary),
+    }
+
+
+def estimate_context_state(db, conversation_id: str) -> dict:
+    """只读估算（不触发压缩、不调 LLM）：供打开历史对话时显示上下文条。"""
+    row = db.execute(
+        "SELECT summary, summarized_count FROM conversation_summaries WHERE conversation_id=?",
+        (conversation_id,)).fetchone()
+    summary = row["summary"] if row else ""
+    summarized_count = row["summarized_count"] if row else 0
+    rows = db.execute(
+        "SELECT role,content FROM messages WHERE conversation_id=? ORDER BY created_at",
+        (conversation_id,)).fetchall()[max(0, summarized_count):]
+    _, tail_chars = load_tail(rows)
+    return {
+        "summary_chars": len(summary or ""),
+        "tail_chars": tail_chars,
+        "budget": TAIL_CHAR_BUDGET,
+        "total_chars": len(summary or "") + tail_chars,
+        "tokens_est": int((len(summary or "") + tail_chars) / 3.5),
+        "budget_tokens": int(TAIL_CHAR_BUDGET / 3.5),
+        "compacted": bool(summary),
+        "pending_compact": tail_chars >= TAIL_CHAR_BUDGET and len(rows) >= MIN_MESSAGES_FOR_COMPACT,
+    }
+
+
 def build_conversation_context(db, conversation_id: str, rows, llm, now_iso) -> dict:
     """组装下一轮对话的上下文：持久化摘要（必要时增量压缩）+ 近期尾部。
 
     rows: 该会话的全部消息（含 user/assistant，时间正序）；已被摘要覆盖的
     前 summarized_count 条会先裁掉，避免重复进入尾部或被二次摘要。
-    返回 {"summary": str|None, "tail": rows}。任何压缩失败都降级为纯尾部截断。
+    返回 {"summary": str|None, "tail": rows, "stats": dict}。任何压缩失败都降级为纯尾部截断。
     """
     row = db.execute(
         "SELECT summary, summarized_count FROM conversation_summaries WHERE conversation_id=?",
@@ -125,4 +164,5 @@ def build_conversation_context(db, conversation_id: str, rows, llm, now_iso) -> 
         except Exception as exc:  # 摘要失败 → 降级：仅用尾部窗口
             LOG.warning("对话压缩失败（%s），降级为尾部截断", exc)
 
-    return {"summary": summary or None, "tail": rows}
+    return {"summary": summary or None, "tail": rows,
+            "stats": context_stats(summary, rows)}

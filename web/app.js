@@ -397,6 +397,23 @@
   });
   citationsClose.addEventListener("click", () => setCitationsOpen(false));
 
+  // ---- 上下文统计条：摘要+尾部字符 / 压缩阈值；达到阈值后端自动压缩 ----
+  const contextMeter = document.getElementById("context-meter");
+  const contextMeterLabel = document.getElementById("context-meter-label");
+  const contextMeterFill = document.getElementById("context-meter-fill");
+  function updateContextMeter(context) {
+    if (!contextMeter || !context || !context.budget) return;
+    const ratio = Math.min(1, (context.total_chars || 0) / context.budget);
+    const fmt = (tokens) => (tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens));
+    contextMeterLabel.textContent = `上下文 ${fmt(context.tokens_est || 0)} / ${fmt(context.budget_tokens || 0)}`;
+    contextMeterLabel.classList.toggle("compacted", Boolean(context.compacted));
+    contextMeterFill.style.width = `${Math.round(ratio * 100)}%`;
+    contextMeter.classList.toggle("warn", ratio >= 0.7 && ratio < 0.92);
+    contextMeter.classList.toggle("hot", ratio >= 0.92);
+    contextMeter.hidden = false;
+  }
+  window.updateContextMeter = updateContextMeter;
+
   messagesEl.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
     const quick = event.target.closest(".quick-btn");
@@ -490,6 +507,8 @@
         if (event.type === "status") {
           stream.status(event.text);
           window.dispatchEvent(new CustomEvent("pet:status", { detail: { text: event.text } }));
+        } else if (event.type === "context") {
+          updateContextMeter(event);
         } else if (event.type === "delta") {
           stream.push(event.text);
         } else if (event.type === "result") {
@@ -542,6 +561,7 @@
     chatTitle.textContent = "新对话";
     messagesEl.innerHTML = welcomeTemplate;
     clearCitations();
+    if (contextMeter) contextMeter.hidden = true;   // 新对话无历史，隐藏上下文条
     renderConversationList();
     closeConversationDrawer();
     input.value = "";
@@ -787,6 +807,7 @@
         }
       });
       setAvailableCitations(latestCitations);
+      updateContextMeter(data.context);
       scrollToBottom();
     } catch {
       conversationId = "";

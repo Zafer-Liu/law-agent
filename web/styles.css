@@ -237,6 +237,23 @@ button:active:not(:disabled) { transform: translateY(1px); }
 }
 .quick-btn:hover { color: var(--primary); background: var(--primary-light); }
 
+/* ---- 上下文统计条（composer 内）：接近压缩阈值时变琥珀/红 ---- */
+.context-meter { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.context-meter svg { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; color: var(--text-muted); }
+.context-meter-label { font-size: 11px; color: var(--text-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.context-meter-label.compacted::after { content: " · 已压缩"; color: var(--success); }
+.context-meter-track { width: 64px; height: 4px; border-radius: 999px; background: #efe8e2;
+  overflow: hidden; flex: 0 0 auto; }
+.context-meter-fill { display: block; height: 100%; width: 0; border-radius: 999px;
+  background: var(--success); transition: width .4s ease, background .3s; }
+.context-meter.warn .context-meter-fill { background: #d97706; }
+.context-meter.warn .context-meter-label { color: #b45309; }
+.context-meter.hot .context-meter-fill { background: var(--danger); }
+.context-meter.hot .context-meter-label { color: var(--danger); }
+@media (max-width: 640px) { .context-meter-track { width: 40px; } }
+
 .msg {
   position: relative; width: fit-content; max-width: calc(100% - 88px);
   padding: 13px 17px; border-radius: var(--radius); line-height: 1.8; font-size: 14px; word-break: break-word;
