@@ -54,17 +54,13 @@
 .pet-badge.pet-fallback[data-state="idle"][data-look="right"] { background-image: url("pet/look-right.png"); }
 .pet-badge.pet-fallback:active { background-image: url("pet/blink.png"); }
 
-/* ---- 阶段立绘模式：web/pet/stage-{0..5}.png 存在时优先于 3D / 表情精灵 ----
-   立绘由 JS 探测后写入行内 background-image（优先级高于上面的表情规则）。 */
+/* ---- 阶段立绘模式：透明底贴图 + 网格变形动画（canvas 渲染，无卡片底） ---- */
 .pet-badge.pet-stageart {
-  border: 1px solid var(--border);
-  background-color: var(--surface);
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  box-shadow: 0 6px 18px rgba(28, 25, 23, .14);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
-.pet-badge.pet-stageart .pet-canvas { display: none; }
+.pet-badge.pet-stageart .pet-canvas { display: block; }
 
 /* 进化闪光：升级瞬间立绘泛白放大回弹（JS 触发，1.3s 后移除） */
 .pet-badge.pet-stageup { animation: pet-stage-up 1.3s ease-out; }

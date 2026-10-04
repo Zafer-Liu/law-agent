@@ -202,8 +202,8 @@
   }
 
   // ---- 阶段立绘：web/pet/stage-{0..5}.png 存在时优先于 3D 展示 ----
-  // 探测成功 → 徽章锁定该立绘（行内 background-image，优先级高于表情精灵规则），
-  // 并阻止 3D 初始化；图缺失则静默回退现有 3D / 静态精灵链路。
+  // 透明底立绘铺在 56×56 可变形网格上：头部会朝光标转、身体呼吸、
+  // 眨眼压扁、开心跳动——动的是宠物部位，不是整张图。
   let stageArtIndex = -1;
   let petDragging = false;          // 与拖拽块共享（pointermove 时置位）
   const pointerAt = { x: innerWidth / 2, y: innerHeight / 2 };
@@ -211,73 +211,139 @@
     pointerAt.x = e.clientX; pointerAt.y = e.clientY;
   }, { passive: true });
 
+  let spriteP = null;   // {THREE, renderer, scene, camera, mesh, base, raf, ...}
+  // 立绘探测完成信号：决定是否启动生物体 3D（4s 兜底防 fetch 失败卡死）
+  let stageArtResolve = null;
+  const stageArtReady = new Promise((resolve) => {
+    stageArtResolve = resolve;
+    setTimeout(resolve, 4000);
+  });
+
   function probeStageArt(index) {
     const url = `${API_BASE}/assets/pet/stage-${index}.png`;
     const img = new Image();
     img.onload = () => {
+      if (stageArtIndex === index && spriteP) { swapSpriteTexture(index); return; }
       stageArtIndex = index;
       badge.classList.add("pet-stageart");
-      badge.style.backgroundImage = `url("${url}")`;
-      startStageArtLoop();
+      badge.style.backgroundImage = "";
+      ensureSprite3D(index);
+      stageArtResolve?.();
     };
     img.onerror = () => {
+      stageArtResolve?.();
       if (stageArtIndex !== -1) {
         stageArtIndex = -1;
+        teardownSprite3D();
         badge.classList.remove("pet-stageart");
-        badge.style.backgroundImage = "";
-        badge.style.transform = "";
       }
     };
     img.src = url;
   }
 
-  // ---- 立绘活体动画：呼吸 + 视线跟随倾斜 + 眨眼压扁 + 状态动作 ----
-  // （对应原 3D 版的 breathe / look / blink / 表情，reduceMotion 时只保留静态）
-  let stageArtRAF = 0, stageArtLastFrame = 0;
-  let nextArtBlinkAt = performance.now() + 2600, artBlinkUntil = 0;
-  function startStageArtLoop() {
-    if (reduceMotion || stageArtRAF || stageArtIndex < 0) return;
-    stageArtRAF = requestAnimationFrame(stageArtFrame);
+  async function ensureSprite3D(index) {
+    if (spriteP) { swapSpriteTexture(index); return; }
+    try {
+      // 与生物体 3D 互斥：接管 canvas 前先停掉旧渲染器
+      loopRunning = false;
+      if (petScene) { petScene.renderer.dispose(); petScene = null; }
+      threeLoadPromise = null;
+      const m = await import(`${API_BASE}/assets/vendor/three.module.min.js?v=0186c`);
+      const renderer = new m.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
+      const scene = new m.Scene();
+      const camera = new m.OrthographicCamera(-0.62, 0.62, 0.62, -0.62, 0.01, 10);
+      camera.position.z = 1;
+      spriteP = {
+        THREE: m, renderer, scene, camera, mesh: null, base: null, raf: 0,
+        lastFrame: 0, yaw: 0, nextBlinkAt: performance.now() + 2600, blinkUntil: 0,
+      };
+      swapSpriteTexture(index);
+      spriteFrame(performance.now());
+    } catch {
+      spriteP = null;
+      badge.classList.remove("pet-stageart");
+    }
   }
-  function stageArtFrame(now) {
-    if (stageArtIndex < 0 || root.style.display === "none") {
-      stageArtRAF = 0;
-      badge.style.transform = "";
+
+  function swapSpriteTexture(index) {
+    const { THREE, scene } = spriteP;
+    new THREE.TextureLoader().load(`${API_BASE}/assets/pet/stage-${index}.png`, (tex) => {
+      if (!spriteP) return;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      if (spriteP.mesh) {
+        scene.remove(spriteP.mesh);
+        spriteP.mesh.geometry.dispose();
+      }
+      const geo = new THREE.PlaneGeometry(1.14, 1.14, 56, 56);
+      spriteP.mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+      spriteP.base = Float32Array.from(geo.attributes.position.array);
+      scene.add(spriteP.mesh);
+    });
+  }
+
+  function teardownSprite3D() {
+    if (!spriteP) return;
+    cancelAnimationFrame(spriteP.raf);
+    spriteP.renderer.dispose();
+    spriteP = null;
+  }
+
+  // 立绘网格变形帧循环：头部转向 / 呼吸 / 眨眼 / 状态动作
+  function spriteFrame(now) {
+    if (!spriteP || stageArtIndex < 0 || root.style.display === "none") {
+      if (spriteP) spriteP.raf = 0;
       return;
     }
-    stageArtRAF = requestAnimationFrame(stageArtFrame);
-    if (now - stageArtLastFrame < 33) return;   // ~30fps，与 3D 版一致
-    stageArtLastFrame = now;
+    spriteP.raf = requestAnimationFrame(spriteFrame);
+    if (now - spriteP.lastFrame < 33 || !spriteP.mesh) return;   // ~30fps
+    spriteP.lastFrame = now;
     const t = now / 1000;
+    const p = spriteP;
 
-    // 呼吸（sleepy 更深更慢）
-    const sleepy = state === "sleepy";
-    let s = 1 + Math.sin(t * (sleepy ? 0.8 : 1.9)) * (sleepy ? 0.045 : 0.03);
-    let rot = 0, tx = 0, ty = 0;
+    // 视口尺寸自适应（拖拽/窗口变化后仍居中）
+    const w = badge.clientWidth || 96, h = badge.clientHeight || 96;
+    if (canvas.width !== Math.round(w * p.renderer.getPixelRatio())) p.renderer.setSize(w, h, false);
 
-    // 视线跟随：朝光标轻微倾斜 + 平移（拖拽中不跟）
+    // 头部朝向：光标方向（拖拽中保持）+ 待机微摆，缓动逼近
+    let yawTarget = Math.sin(t * 0.9) * 0.05;
     if (!petDragging) {
       const b = badge.getBoundingClientRect();
-      const dx = clamp((pointerAt.x - (b.left + b.width / 2)) / (window.innerWidth / 2), -1, 1);
-      const dy = clamp((pointerAt.y - (b.top + b.height / 2)) / (window.innerHeight / 2), -1, 1);
-      rot += dx * 3.2; tx += dx * 3; ty += dy * 2;
+      yawTarget += clamp((pointerAt.x - (b.left + b.width / 2)) / (window.innerWidth / 2), -1, 1) * 0.16;
     }
+    p.yaw += (yawTarget - p.yaw) * 0.12;
 
-    // 状态动作（对应 3D 表情）
-    if (state === "happy") { s *= 1 + Math.abs(Math.sin(t * 9)) * 0.06; rot += Math.sin(t * 11) * 4; }
-    else if (state === "typing") { rot += Math.sin(t * 8.5) * 5; }
-    else if (state === "thinking") { rot += Math.sin(t * 1.3) * 3; }
-    else if (sleepy) { rot += Math.sin(t * 0.7) * 1.5; }
+    // 状态动作
+    let hop = 0, lean = 0;
+    let breathe = Math.sin(t * 1.9) * 0.016;
+    if (state === "happy") { hop = Math.abs(Math.sin(t * 7)) * 0.035; p.yaw += Math.sin(t * 11) * 0.05; }
+    else if (state === "typing") { p.yaw += Math.sin(t * 8.5) * 0.1; }
+    else if (state === "thinking") { lean = Math.sin(t * 1.3) * 0.05; }
+    else if (state === "sleepy") { breathe = Math.sin(t * 0.8) * 0.026; lean = Math.sin(t * 0.7) * 0.02; }
 
-    // 眨眼：快速压扁一下
-    if (now >= nextArtBlinkAt) {
-      artBlinkUntil = now + 130;
-      nextArtBlinkAt = now + 2200 + Math.random() * 2800;
+    // 眨眼：头部轻微压扁一下
+    if (now >= p.nextBlinkAt) {
+      p.blinkUntil = now + 130;
+      p.nextBlinkAt = now + 2200 + Math.random() * 2800;
     }
-    if (now < artBlinkUntil) s *= 0.9;
+    const blink = now < p.blinkUntil ? 1 : 0;
 
-    badge.style.transform =
-      `translate(${tx.toFixed(2)}px, ${ty.toFixed(2)}px) rotate(${rot.toFixed(2)}deg) scale(${s.toFixed(4)})`;
+    const pos = p.mesh.geometry.attributes.position;
+    const arr = pos.array, base = p.base;
+    const NECK = 0.10;                       // 颈部枢轴（平面坐标 y）
+    for (let i = 0; i < arr.length; i += 3) {
+      const x0 = base[i], y0 = base[i + 1];
+      const headW = clamp((y0 - NECK) / 0.12, 0, 1);        // 头部权重（顶部渐变）
+      const dy = y0 - NECK;
+      // 头部绕颈部倾斜 + 水平剪切（近似的"转头朝光标"）
+      let x = x0 + (p.yaw * dy * 1.1) * headW;
+      let y = y0 + hop + breathe * (y0 + 0.55) * 1.4;
+      if (blink && dy > 0) y -= 0.018 * headW;              // 眨眼压扁
+      if (lean) x += lean * (y0 + 0.55) * 0.9 * (1 - headW * 0.4);
+      arr[i] = x; arr[i + 1] = y;
+    }
+    pos.needsUpdate = true;
+    p.renderer.render(p.scene, p.camera);
   }
 
   function renderPet(pet) {
@@ -1282,6 +1348,7 @@
   function ensure3D() {
     cancelScheduled3D();
     if (root.style.display === "none") return Promise.resolve(null);
+    if (stageArtIndex >= 0) return Promise.resolve(null);   // 立绘模式接管，不启动生物体 3D
     if (petScene) {
       startLoop(petScene);
       return Promise.resolve(petScene);
@@ -1334,5 +1401,9 @@
 
   badge.addEventListener("pointerenter", ensure3D);
   badge.addEventListener("focus", ensure3D);
-  if (!initiallyHidden) schedule3D();
+  // 先探测立绘（fetchPet→probeStageArt），确认无立绘才启动生物体 3D，
+  // 避免两个渲染器争用同一个 canvas。
+  if (!initiallyHidden) {
+    Promise.resolve(stageArtReady).finally(() => { if (stageArtIndex < 0) schedule3D(); });
+  }
 })();
