@@ -282,14 +282,21 @@
   }
 
   // 幼獬切换真实朝向帧；其余阶段保留轻微跟随，避免套用幼獬的外观。
-  const pointerAt = { x: innerWidth / 2, y: innerHeight / 2, seen: false };
+  const pointerAt = { x: innerWidth / 2, y: innerHeight / 2, seen: false, lastMoved: 0 };
   window.addEventListener("pointermove", (e) => {
     if (e.pointerType && e.pointerType !== "mouse" && e.pointerType !== "pen") return;
+    if (!pointerAt.seen || e.clientX !== pointerAt.x || e.clientY !== pointerAt.y) {
+      pointerAt.lastMoved = performance.now();
+    }
     pointerAt.x = e.clientX; pointerAt.y = e.clientY; pointerAt.seen = true;
     if (stageArtIndex === 0) updateGaze();
   }, { passive: true });
   function updateGaze() {
     if (reduceMotion || petDragging || !pointerAt.seen || stageArtIndex !== 0) return;
+    if (performance.now() - pointerAt.lastMoved >= 3000) {
+      badge.dataset.gaze = "front";
+      return;
+    }
     const b = badge.getBoundingClientRect();
     const dx = (pointerAt.x - (b.left + b.width / 2)) / Math.max(window.innerWidth / 2, 1);
     const current = badge.dataset.gaze || "front";
