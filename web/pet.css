@@ -54,20 +54,30 @@
 .pet-badge.pet-fallback[data-state="idle"][data-look="right"] { background-image: url("pet/look-right.png"); }
 .pet-badge.pet-fallback:active { background-image: url("pet/blink.png"); }
 
-/* ---- 阶段动画模式：AI 生成的透明底循环视频（web/pet/stage-N.webm） ---- */
+/* 阶段动画：幼獬使用独立的左/右朝向循环帧。 */
 .pet-badge.pet-stageart {
   border: 0;
   background: transparent;
+  background-image: none;
   box-shadow: none;
 }
+.pet-badge.pet-stageart[data-state][data-look],
+.pet-badge.pet-stageart:active { background-image: none; }
 .pet-badge .pet-video {
   display: none;
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: contain;
-  pointer-events: none;      // 点击/拖拽仍由徽章接管
+  pointer-events: none;
 }
-.pet-badge.pet-stageart .pet-video { display: block; }
+.pet-badge.pet-stageart .pet-video:not(.pet-direction) { display: block; }
+.pet-badge.pet-stageart[data-art-stage="0"] .pet-direction { display: block; }
+.pet-badge.pet-stageart[data-art-stage="0"] .pet-video { opacity: 0; transition: opacity .22s ease; }
+.pet-badge.pet-stageart[data-art-stage="0"] .pet-video:not(.pet-direction),
+.pet-badge.pet-stageart[data-art-stage="0"][data-gaze="left"] .pet-direction-left,
+.pet-badge.pet-stageart[data-art-stage="0"][data-gaze="right"] .pet-direction-right { opacity: 1; }
+.pet-badge.pet-stageart[data-art-stage="0"][data-gaze="left"] .pet-video:not(.pet-direction),
+.pet-badge.pet-stageart[data-art-stage="0"][data-gaze="right"] .pet-video:not(.pet-direction) { opacity: 0; }
 .pet-badge.pet-stageart .pet-canvas { display: none; }
 
 /* 进化闪光：升级瞬间立绘泛白放大回弹（JS 触发，1.3s 后移除） */
@@ -450,6 +460,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .pet-badge .pet-video { transition: none; }
   .pet-badge,
   .pet-bubble.show { animation: none; transition: none; }
   .pet-bubble.thinking::after { animation: none; }

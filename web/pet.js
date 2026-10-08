@@ -129,9 +129,8 @@
       const r = badge.getBoundingClientRect();
       look.x = (e.clientX - (r.left + r.width / 2)) / Math.max(window.innerWidth / 2, 1);
       look.y = (e.clientY - (r.top + r.height / 2)) / Math.max(window.innerHeight / 2, 1);
-      badge.dataset.look = look.x < -0.08 ? "left" : look.x > 0.08 ? "right" : "center";
+      if (!petDragging) badge.dataset.look = look.x < -0.08 ? "left" : look.x > 0.08 ? "right" : "center";
     }, { passive: true });
-    badge.addEventListener("pointerleave", () => { badge.dataset.look = "center"; });
   }
 
   // ---- 打字动画 ----
@@ -201,61 +200,126 @@
     retryButton.hidden = kind !== "error";
   }
 
-  // ---- 阶段立绘：web/pet/stage-{0..5}.png 存在时优先于 3D 展示 ----
-  // ---- 阶段动画：web/pet/stage-{0..5}.webp（AI 生成循环待机动画，透明底） ----
-  // 动画 WebP 由 <img> 原生循环播放；缺失 → 回退 3D / 静态精灵链路。
+  // 阶段动画以当前成长阶段为准；幼獬额外拥有独立的左右朝向循环帧。
   let stageArtIndex = -1;
-  let petDragging = false;          // 与拖拽块共享（pointermove 时置位）
+  let petDragging = false;
   let stageImg = null;
-  // 立绘探测完成信号：决定是否启动生物体 3D（4s 兜底防 fetch 失败卡死）
-  const stageArtReady = Promise.resolve(null);
+  let stageArtLoading = false;
+  let artRequest = 0;
+  let requestedStage = -1;
+  const directionArt = {};
+  let artTimeout = 0;
+  let idleLoadHandle = 0;
+  let idleLoadKind = "";
 
-  function probeStageArt(index) {
-    const url = `${API_BASE}/assets/pet/stage-${index}.webp`;
-    if (!stageImg) {
-      stageImg = document.createElement("img");
-      stageImg.className = "pet-video";
-      stageImg.alt = "";
-      stageImg.setAttribute("aria-hidden", "true");
-      badge.insertBefore(stageImg, badge.firstChild);
-    }
-    stageImg.onload = () => {
-      stageArtIndex = index;                 // 动画就绪 = 立绘模式生效
-      badge.classList.add("pet-stageart");
-    };
-    stageImg.onerror = () => {
-      stageArtIndex = -1;
-      badge.classList.remove("pet-stageart");
-      if (stageImg) { stageImg.remove(); stageImg = null; }
-    };
-    if (stageImg.dataset.stageIndex !== String(index)) {
-      stageImg.dataset.stageIndex = String(index);
-      stageImg.src = url;
+  function loadDirections() {
+    for (const side of ["left", "right"]) {
+      if (directionArt[side]) continue;
+      const img = new Image();
+      directionArt[side] = img;
+      img.className = `pet-video pet-direction pet-direction-${side}`;
+      img.alt = "";
+      img.setAttribute("aria-hidden", "true");
+      img.onload = () => {
+        badge.insertBefore(img, chip);
+        if (stageArtIndex === 0) updateGaze();
+      };
+      img.onerror = () => {
+        if (badge.dataset.gaze === side) badge.dataset.gaze = "front";
+      };
+      img.src = `${API_BASE}/assets/pet/hero-look-${side}.webp`;
     }
   }
 
-  // 鼠标跟随（伪 3D 转头）：透视 rotateY + 平移，光标左右移动时宠物明显转头
-  const pointerAt = { x: innerWidth / 2, y: innerHeight / 2 };
+  function probeStageArt(index) {
+    index = Number.isInteger(index) && index >= 0 && index <= 5 ? index : 0;
+    if (requestedStage === index) return;
+    requestedStage = index;
+    const request = ++artRequest;
+    clearTimeout(artTimeout);
+    stageArtIndex = -1;
+    stageArtLoading = true;
+    badge.classList.remove("pet-stageart");
+    badge.classList.add("pet-fallback");
+    badge.dataset.artStage = "";
+    badge.dataset.gaze = "front";
+    if (stageImg) stageImg.remove();
+    stageImg = null;
+    if (index === 0 && !reduceMotion) loadDirections();
+    cancelScheduled3D();
+    const img = new Image();
+    img.className = "pet-video";
+    img.alt = "";
+    img.setAttribute("aria-hidden", "true");
+    img.onload = () => {
+      if (request !== artRequest) return;
+      fx = 0; fy = 0; fry = 0;
+      stageImg = img;
+      badge.insertBefore(img, badge.firstChild);
+      stageArtIndex = index;
+      clearTimeout(artTimeout);
+      stageArtLoading = false;
+      badge.dataset.artStage = String(index);
+      badge.classList.add("pet-stageart");
+      if (index === 0) updateGaze();
+      cancelScheduled3D();
+    };
+    img.onerror = () => {
+      if (request !== artRequest) return;
+      clearTimeout(artTimeout);
+      requestedStage = -1;
+      stageArtLoading = false;
+      schedule3D();
+    };
+    img.src = `${API_BASE}/assets/pet/stage-${index}.webp`;
+    artTimeout = setTimeout(() => {
+      if (request !== artRequest || !stageArtLoading) return;
+      ++artRequest;
+      requestedStage = -1;
+      stageArtLoading = false;
+      schedule3D();
+    }, 4000);
+  }
+
+  // 幼獬切换真实朝向帧；其余阶段保留轻微跟随，避免套用幼獬的外观。
+  const pointerAt = { x: innerWidth / 2, y: innerHeight / 2, seen: false };
   window.addEventListener("pointermove", (e) => {
-    pointerAt.x = e.clientX; pointerAt.y = e.clientY;
+    if (e.pointerType && e.pointerType !== "mouse" && e.pointerType !== "pen") return;
+    pointerAt.x = e.clientX; pointerAt.y = e.clientY; pointerAt.seen = true;
+    if (stageArtIndex === 0) updateGaze();
   }, { passive: true });
+  function updateGaze() {
+    if (reduceMotion || petDragging || !pointerAt.seen || stageArtIndex !== 0) return;
+    const b = badge.getBoundingClientRect();
+    const dx = (pointerAt.x - (b.left + b.width / 2)) / Math.max(window.innerWidth / 2, 1);
+    const current = badge.dataset.gaze || "front";
+    let next = current;
+    if (dx < -0.22 && current !== "left") next = "left";
+    else if (dx > 0.22 && current !== "right") next = "right";
+    else if (Math.abs(dx) < 0.10) next = "front";
+    if (next !== "front" && !directionArt[next]?.naturalWidth) next = "front";
+    if (next !== current) badge.dataset.gaze = next;
+  }
   let followRAF = 0, followLast = 0, fx = 0, fy = 0, fry = 0;
   function followFrame(now) {
     followRAF = requestAnimationFrame(followFrame);
-    if (now - followLast < 33) return;         // ~30fps
+    if (now - followLast < 33) return;
     followLast = now;
     const img = stageImg;
     if (!img || stageArtIndex < 0 || root.style.display === "none") return;
+    if (stageArtIndex === 0) {
+      updateGaze();
+      return;
+    }
     const b = badge.getBoundingClientRect();
     let tx = 0, ty = 0, ry = 0;
     if (!petDragging) {
       const dx = (pointerAt.x - (b.left + b.width / 2)) / (window.innerWidth / 2);
       const dy = (pointerAt.y - (b.top + b.height / 2)) / (window.innerHeight / 2);
-      tx = clamp(dx, -1, 1) * 9;               // 横向最多 9px
+      tx = clamp(dx, -1, 1) * 9;
       ty = clamp(dy, -1, 1) * 4;
-      ry = clamp(dx, -1, 1) * 24;              // 透视转头 ±24°，肉眼明显
+      ry = clamp(dx, -1, 1) * 24;
     }
-    // 缓动逼近，静止时回正
     fx += (tx - fx) * 0.1; fy += (ty - fy) * 0.1; fry += (ry - fry) * 0.1;
     img.style.transform =
       `perspective(180px) translate(${fx.toFixed(2)}px, ${fy.toFixed(2)}px) rotateY(${fry.toFixed(2)}deg)`;
@@ -446,7 +510,7 @@
 
   function patPet() {
     markOnboardingSeen();
-    ensure3D();
+    if (!stageArtLoading) ensure3D();
     setState("happy");
     lastActivity = Date.now();
     const lines = PAT_LINES[currentPet && currentPet.stage] || PAT_LINES.cub;
@@ -463,7 +527,8 @@
       else localStorage.setItem(HIDDEN_KEY, "1");
     } catch { /* 存储不可用则只影响本次会话 */ }
     if (visible) {
-      ensure3D();
+      if (stageArtIndex < 0 && !stageArtLoading) probeStageArt(stageIndex);
+      if (!stageArtLoading) ensure3D();
       setState("happy");
       say("我回来啦！", 2400);
       lastActivity = Date.now();
@@ -491,7 +556,10 @@
     initiallyHidden = localStorage.getItem(HIDDEN_KEY) === "1";
     if (initiallyHidden) root.style.display = "none";
   } catch { /* 忽略存储异常 */ }
-  if (!initiallyHidden) fetchPet();
+  if (!initiallyHidden) {
+    probeStageArt(0);
+    fetchPet();
+  }
 
   // ---- 面板开关 ----
   let panelHideTimer = 0;
@@ -548,7 +616,7 @@
     requestAnimationFrame(() => placePanel());
     setTimeout(placePanel, 60);
     fetchPet({ showLoading: true });
-    ensure3D();
+    if (!stageArtLoading) ensure3D();
     setState("happy");
     panelClose.focus();
   }
@@ -801,6 +869,7 @@
       }
       pressed = false;
       dragging = false;
+      if (stageArtIndex === 0) updateGaze();
     };
     badge.addEventListener("pointerup", endDrag);
     badge.addEventListener("pointercancel", endDrag);
@@ -1122,8 +1191,6 @@
   let petScene = null;
   let threeLoadPromise = null;
   let loopRunning = false;
-  let idleLoadHandle = 0;
-  let idleLoadKind = "";
 
   function startLoop(P) {
     if (loopRunning) return;
@@ -1245,7 +1312,7 @@
 
   function schedule3D() {
     if (idleLoadHandle || petScene || threeLoadPromise || root.style.display === "none") return;
-    if (stageArtIndex >= 0) return;   // 阶段立绘已就位，不再支付 3D 成本
+    if (stageArtIndex >= 0 || stageArtLoading) return;
     const load = () => {
       idleLoadHandle = 0;
       idleLoadKind = "";
@@ -1264,7 +1331,7 @@
   function ensure3D() {
     cancelScheduled3D();
     if (root.style.display === "none") return Promise.resolve(null);
-    if (stageArtIndex >= 0) return Promise.resolve(null);   // 立绘模式接管，不启动生物体 3D
+    if (stageArtIndex >= 0 || stageArtLoading) return Promise.resolve(null);
     if (petScene) {
       startLoop(petScene);
       return Promise.resolve(petScene);
@@ -1272,6 +1339,10 @@
     if (threeLoadPromise) return threeLoadPromise;
     threeLoadPromise = import(`${API_BASE}/assets/vendor/three.module.min.js?v=0186c`)
       .then((m) => {
+        if (stageArtIndex >= 0 || stageArtLoading || root.style.display === "none") {
+          threeLoadPromise = null;
+          return null;
+        }
         const P = buildScene(m);
         if (!P) {
           threeLoadPromise = null;
@@ -1317,9 +1388,4 @@
 
   badge.addEventListener("pointerenter", ensure3D);
   badge.addEventListener("focus", ensure3D);
-  // 先探测立绘（fetchPet→probeStageArt），确认无立绘才启动生物体 3D，
-  // 避免两个渲染器争用同一个 canvas。
-  if (!initiallyHidden) {
-    Promise.resolve(stageArtReady).finally(() => { if (stageArtIndex < 0) schedule3D(); });
-  }
 })();
