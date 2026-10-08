@@ -556,6 +556,35 @@
     conversationBackdrop.hidden = true;
   }
 
+  // ---- 欢迎屏吉祥物追视：鼠标左右分区切换朝向动画（带滞回防抖） ----
+  // 三张透明 WebP 叠放，仅切透明度；素材缺失时停留在正面，不影响页面。
+  const heroMascotZone = { current: "front" };
+  window.addEventListener("pointermove", (e) => {
+    heroMascotZone.x = e.clientX / Math.max(1, window.innerWidth);
+  }, { passive: true });
+  let heroRaf = 0, heroLast = 0;
+  function heroMascotFrame(now) {
+    heroRaf = requestAnimationFrame(heroMascotFrame);
+    if (now - heroLast < 80) return;
+    heroLast = now;
+    const mascot = messagesEl.querySelector(".welcome-mascot");
+    if (!mascot || document.hidden) return;
+    const x = heroMascotZone.x ?? 0.5;
+    let zone = heroMascotZone.current;
+    if (x < 0.35) zone = "left";
+    else if (x > 0.65) zone = "right";
+    else if (zone === "left" && x < 0.5) zone = "left";       // 滞回：进入后需过中线才回正面
+    else if (zone === "right" && x > 0.5) zone = "right";
+    else zone = "front";
+    if (zone !== heroMascotZone.current) {
+      heroMascotZone.current = zone;
+      mascot.dataset.zone = zone;
+    }
+  }
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    heroRaf = requestAnimationFrame(heroMascotFrame);
+  }
+
   function startNewConversation() {
     conversationId = "";
     chatTitle.textContent = "新对话";
