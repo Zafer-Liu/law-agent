@@ -12,9 +12,6 @@
   isolation: isolate;
 }
 
-/* 欢迎页已有追视吉祥物，聊天开始后再显示悬浮桌宠。 */
-.messages:has(> .welcome) ~ .pet-root { display: none; }
-
 .pet-badge {
   position: relative;
   width: 96px;
