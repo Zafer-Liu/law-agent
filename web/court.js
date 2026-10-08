@@ -923,6 +923,13 @@
       deliberationEl.hidden = true;
       verdictEl.hidden = false;
 
+      const analysisEl = document.getElementById("analysis-content");
+      let analysisPlaceholder = true;
+      let analysisSettled = false;
+      analysisEl.textContent = "审判长正在生成复盘…";
+      analysisEl.classList.add("loading");
+      analysisEl.setAttribute("aria-busy", "true");
+
       document.getElementById("verdict-yours").textContent =
         opt.label + (opt.convict ? `，量刑建议：${body.years} 年有期徒刑` : "")
         + (markedEvidence.size ? `（关键证据：${displayMarkedEvidence()}）` : "");
@@ -936,13 +943,15 @@
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
+          analysisEl.textContent = "审判长复盘生成失败，请稍后重试。";
+          analysisEl.classList.remove("loading");
+          analysisEl.setAttribute("aria-busy", "false");
+          analysisSettled = true;
           toast(err.error || "提交失败");
           if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
           return;
         }
 
-        let analysisEl = document.getElementById("analysis-content");
-        analysisEl.textContent = "";
         await readSse(res, (event) => {
           if (event.type === "verdict") {
             document.getElementById("verdict-real").textContent = event.real.summary;
@@ -951,7 +960,22 @@
             renderVerdictTrajectory(event);
             renderKnowledge(event.knowledge, currentCaseId);
           } else if (event.type === "delta") {
+            if (analysisPlaceholder) {
+              analysisEl.textContent = "";
+              analysisEl.classList.remove("loading");
+              analysisPlaceholder = false;
+            }
             analysisEl.textContent += displayEvidenceNames(event.text);
+          } else if (event.type === "result") {
+            analysisEl.classList.remove("loading");
+            analysisEl.setAttribute("aria-busy", "false");
+            if (analysisPlaceholder) {
+              analysisEl.textContent = event.analysis
+                ? displayEvidenceNames(event.analysis)
+                : "审判长复盘暂未生成，请稍后重试。";
+              analysisPlaceholder = false;
+            }
+            analysisSettled = true;
           } else if (event.type === "reasoning_score" && event.score) {
             renderReasoningScore(event.score);
             window.trackEvent?.("reasoning_scored", {
@@ -960,15 +984,31 @@
                 + event.score.reasoning) / 3),
             });
           } else if (event.type === "error") {
+            analysisEl.textContent = "审判长复盘生成失败，请稍后重试。";
+            analysisEl.classList.remove("loading");
+            analysisEl.setAttribute("aria-busy", "false");
+            analysisPlaceholder = false;
+            analysisSettled = true;
             toast(event.error);
           } else if (event.type === "pet" && event.pet) {
             window.dispatchEvent(new CustomEvent("pet:pet", { detail: { pet: event.pet } }));
           }
         });
+        if (!analysisSettled) {
+          analysisEl.classList.remove("loading");
+          analysisEl.setAttribute("aria-busy", "false");
+          if (analysisPlaceholder) {
+            analysisEl.textContent = "审判长复盘暂未生成，请稍后重试。";
+            analysisPlaceholder = false;
+          }
+        }
         window.trackEvent?.("court_complete", {
           case_id: currentCaseId, role: selectedRole || "juror",
         });
       } catch {
+        analysisEl.textContent = "审判长复盘生成失败，请检查网络后重试。";
+        analysisEl.classList.remove("loading");
+        analysisEl.setAttribute("aria-busy", "false");
         toast("网络错误");
       }
     };
