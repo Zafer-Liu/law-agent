@@ -29,7 +29,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
 body.qa-active { overflow: hidden; }
 button, textarea { font: inherit; }
 button:focus-visible, textarea:focus-visible, summary:focus-visible {
-  outline: 3px solid var(--focus); outline-offset: 3px;
+  outline: 2px solid var(--primary-dark); outline-offset: 3px;
 }
 button:active:not(:disabled) { transform: translateY(1px); }
 ::selection { background: var(--primary-lighter); color: var(--text); }
@@ -1325,4 +1325,85 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
   .matter-workspace { grid-template-columns: 1fr; }
   .matter-sidebar { position: static; max-height: none; order: 2; }
   .matter-field-grid, .matter-duo { grid-template-columns: 1fr; }
+}
+
+/* Uiverse-inspired refinements. Sources and MIT notices: UIVERSE_LICENSE.md. */
+/* alexruix's hover card: a quiet, fully readable treatment for the question starters. */
+.question-groups { gap: 14px; margin-top: 30px; }
+.question-group {
+  min-width: 0; padding: 18px 18px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface);
+  transition: border-color .24s ease, box-shadow .24s ease, transform .24s ease;
+}
+.question-group:hover,
+.question-group:focus-within {
+  border-color: #d8aaa4;
+  box-shadow: 0 9px 22px rgba(65, 32, 27, .09);
+  transform: translateY(-2px);
+}
+.question-group h3 { margin-bottom: 10px; font-size: 14px; }
+.quick-btn { min-height: 44px; padding: 9px 0; line-height: 1.45; }
+.quick-btn:last-child { border-bottom: 0; }
+.quick-btn:hover, .quick-btn:focus-visible { background: transparent; color: var(--primary-dark); }
+
+/* satyamchaudharydev's hover button: a single sweep on an enabled primary action. */
+.send-btn, .primary-btn { position: relative; isolation: isolate; overflow: hidden; }
+.send-btn::before, .primary-btn::before {
+  content: ""; position: absolute; z-index: 0; top: 0; bottom: 0; left: -55%;
+  width: 42%; transform: skewX(-22deg);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent);
+  transition: left .55s ease;
+  pointer-events: none;
+}
+.send-btn:hover:not(:disabled)::before,
+.primary-btn:hover:not(:disabled)::before { left: 115%; }
+.send-btn:hover:not(:disabled), .primary-btn:hover:not(:disabled) { transform: translateY(-2px); }
+.send-btn:active:not(:disabled), .primary-btn:active:not(:disabled) { transform: translateY(0); }
+
+/* micaelgomestavares's form focus pattern, adapted to the existing fields. */
+.matter-field input, .matter-field textarea, .auth-field input {
+  background: var(--surface);
+  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+}
+.matter-field:focus-within input, .matter-field:focus-within textarea,
+.auth-field:focus-within input {
+  border-color: var(--primary);
+  background: #fff;
+  box-shadow: 0 0 0 3px var(--focus);
+}
+.matter-field input:focus-visible, .matter-field textarea:focus-visible,
+.auth-field input:focus-visible { outline: none; }
+
+/* Keep the four destinations and account controls visible on narrow screens. */
+@media (max-width: 640px) {
+  :root { --topbar-height: 112px; }
+  .topbar {
+    height: var(--topbar-height); min-height: var(--topbar-height);
+    padding: 8px 14px 10px; gap: 0 8px; flex-wrap: wrap; align-content: space-between;
+  }
+  .brand { margin-right: auto; }
+  .auth-area { margin-left: auto; }
+  .tabs {
+    order: 3; flex: 0 0 100%; width: 100%; margin: 0; padding: 3px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px;
+  }
+  .tab { width: 100%; min-height: 38px; padding: 6px 2px; font-size: 12px; }
+  .settings-button { width: 40px; height: 40px; }
+  .question-groups { gap: 10px; }
+  .question-group { padding: 14px 16px 8px; }
+  .question-group:hover, .question-group:focus-within { transform: none; }
+  .welcome { padding-top: 18px; }
+  .welcome > p { margin-bottom: 12px; }
+}
+@media (max-width: 360px) {
+  .topbar { padding-inline: 10px; gap: 0 4px; }
+  .brand-name { font-size: 15px; }
+  .auth-chip { max-width: 92px; }
+  .tab { font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .question-group, .matter-field input, .matter-field textarea, .auth-field input,
+  .send-btn::before, .primary-btn::before { transition: none; }
+  .question-group:hover, .question-group:focus-within,
+  .send-btn:hover:not(:disabled), .primary-btn:hover:not(:disabled) { transform: none; }
 }
