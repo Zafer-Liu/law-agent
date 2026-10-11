@@ -1,0 +1,28 @@
+module procedure:
+  block type=route title='主线与支线：一场官司可能走的路' items=0
+    station jurisdiction: col=1 row=1 branch=None
+    station trial: col=2 row=1 branch=None
+    station appeal: col=3 row=1 branch=None
+    station enforce: col=4 row=1 branch=None
+    station small: col=2 row=2 branch=True
+    station retrial: col=3 row=2 branch=True
+    station procuratorate: col=4 row=2 branch=True
+    road start->jurisdiction via=None branch=None label='决定起诉'
+    road jurisdiction->trial via=None branch=None label='递交起诉状 · 受理'
+    road trial->appeal via=None branch=None label='不服一审判决 · 十五日内上诉'
+    road appeal->enforce via=None branch=None label='二审裁判 · 即刻生效'
+    road trial->enforce via=top branch=None label='不上诉 · 十五日后生效'
+    road trial->small via=None branch=True label='标的额小 · 适用小额程序'
+    road enforce->retrial via=None branch=True label='对生效判决不服 · 六个月内申请再审'
+    road procuratorate->retrial via=None branch=True label='抗诉 · 必然进入再审'
+    road enforce->end via=None branch=None label=''
+  block type=table title='民事、刑事、行政：三大诉讼管的事不一样' items=0
+  block type=cards title='打官司之前或打官司之中，也可以试试这些' items=5
+module knowledge:
+  block type=faq title='打官司前必须知道的八件事' items=8
+module loan:
+  block type=cards title='贷款与借钱的七条底线' items=7
+  block type=notes title='一张合格借条的清单' items=8
+module help:
+  block type=hotlines title='常用官方热线' items=8
+  block type=notes title='求助时记得' items=4

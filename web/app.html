@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#c8281e">
+  <meta name="theme-color" content="#CC0000">
   <title>法晓 · AI 法律助手</title>
   <link rel="icon" type="image/png" sizes="256x256" href="assets/logo.png">
   <link rel="stylesheet" href="assets/styles.css">
@@ -11,9 +11,16 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
+    <a class="brand" href="/" aria-label="返回产品主页">
       <img class="brand-mark" src="assets/logo.png" alt="法晓标志">
       <span class="brand-name">法晓<small>AI 法律助手</small></span>
+    </a>
+    <div class="edition-line" aria-hidden="true">
+      <span id="edition-date">法晓特刊</span>
+      <span class="edition-rule"></span>
+      <span>智能法律版</span>
+      <span class="edition-rule"></span>
+      <span>OPEN SOURCE</span>
     </div>
     <nav class="tabs" role="tablist" aria-label="主要功能">
       <button id="tab-button-qa" class="tab active" data-tab="qa" role="tab"
@@ -22,6 +29,8 @@
         aria-selected="false" aria-controls="tab-matter">问题工作台</button>
       <button id="tab-button-court" class="tab" data-tab="court" role="tab"
         aria-selected="false" aria-controls="tab-court">模拟法庭</button>
+      <button id="tab-button-basics" class="tab" data-tab="basics" role="tab"
+        aria-selected="false" aria-controls="tab-basics">法律常识</button>
       <button id="tab-button-learn" class="tab" data-tab="learn" role="tab"
         aria-selected="false" aria-controls="tab-learn">学习地图</button>
     </nav>
@@ -449,6 +458,23 @@
     </div>
   </main>
 
+  <!-- ==================== 法律常识 Tab ==================== -->
+  <main id="tab-basics" class="tab-panel basics-panel" role="tabpanel" aria-labelledby="tab-button-basics">
+    <div class="learn-wrap basics-wrap">
+      <header class="matter-head">
+        <span class="section-kicker">法律常识</span>
+        <h2>打官司之前，先装进口袋的常识</h2>
+        <p class="muted">诉讼怎么走、时限怎么算、借钱怎么避坑、出事找谁——先看清规则，遇事不慌张。读完想深究，随时去问法晓。</p>
+      </header>
+
+      <div id="basics-cards" class="basics-index-grid" aria-label="普法文章"></div>
+      <p id="basics-error" class="conversation-empty" hidden>
+        法律常识载入失败，请稍后重试。
+        <button id="basics-retry" class="basics-ask" type="button">重新加载</button>
+      </p>
+    </div>
+  </main>
+
   <!-- ==================== 学习地图 Tab ==================== -->
   <main id="tab-learn" class="tab-panel learn-panel" role="tabpanel" aria-labelledby="tab-button-learn">
     <div class="learn-wrap">
@@ -617,6 +643,7 @@
   <script src="assets/app.js"></script>
   <script src="assets/matter.js"></script>
   <script src="assets/learn.js"></script>
+  <script src="assets/basics.js"></script>
   <script src="assets/pet.js"></script>
   <script src="assets/court.js"></script>
 </body>

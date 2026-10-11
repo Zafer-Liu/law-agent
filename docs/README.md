@@ -14,7 +14,7 @@
 
 ## 项目速览
 
-- 产品功能：引用式法律问答、可选角色的多 Agent 模拟法庭。
+- 产品功能：引用式法律问答、问题工作台、可选角色的多 Agent 模拟法庭、法律常识普法板块（四篇独立文章页 `/basics/<key>`，公开访问）。
 - 后端：Flask、SQLite、FTS5、jieba、OpenAI 兼容模型接口。
 - 前端：原生 HTML、CSS、JavaScript，无构建步骤。
 - 法律问答模型：生产环境预期为 `MiniMax-M3`。
@@ -26,6 +26,7 @@
 
 ```text
 legalweb/app.py                 Flask 应用工厂、HTTP API、SSE 编排
+legalweb/basics.py              法律常识（普法）内容加载与结构校验
 legalweb/qa.py                  法律问答提示词、逐条证据、引用校验
 legalweb/rag.py                 词法/FTS/向量检索和 RRF 融合
 legalweb/documents.py           Markdown/TXT/DOCX 解析与分块
@@ -35,10 +36,11 @@ legalweb/jev_gate.py            可选 Jev 相关性/提示注入门控
 legalweb/courtroom/engine.py    模拟法庭状态机
 legalweb/courtroom/agents.py    模拟法庭角色约束和提示词
 legalweb/courtroom/cases.py     模拟法庭案例加载与校验
-web/                            零构建前端
+web/                            零构建前端（index.html 单页 + basics.html 普法文章页）
 assset/law/                     法律问答内置法条
 assset/case/                    法律问答内置判例
 assset/moot-court/              模拟法庭案例 JSON
+assset/legal-basics/            法律常识（普法内容 JSON）
 seed/                           小型种子知识库
 tests/                          无外部模型依赖的回归测试
 test_court_e2e.py               需要真实模型的模拟法庭端到端测试

@@ -28,6 +28,7 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from . import basics as basics_module
 from . import matter as matter_module
 from . import qa
 from .courtroom import cases as court_cases
@@ -429,9 +430,27 @@ def create_app() -> Flask:
     def health():
         return jsonify({"ok": True})
 
+    LANDING_DIR = WEB_DIR / "landing"
+
     @app.get("/")
     def index():
-        return send_from_directory(WEB_DIR, "index.html")
+        """产品落地页（React 构建产物，源码见 frontend/）。"""
+        return send_from_directory(LANDING_DIR, "index.html")
+
+    @app.get("/share")
+    def share():
+        """落地页分享路由（前端 BrowserRouter 路由，复用同一入口）。"""
+        return send_from_directory(LANDING_DIR, "index.html")
+
+    @app.get("/app")
+    def app_page():
+        """应用单页（问答/工作台/法庭/常识/学习）。"""
+        return send_from_directory(WEB_DIR, "app.html")
+
+    @app.get("/landing/<path:name>")
+    def landing_assets(name):
+        """落地页静态资源（vite base 为 /landing/）。"""
+        return send_from_directory(LANDING_DIR, name)
 
     @app.get("/assets/<path:name>")
     def assets(name):
@@ -444,6 +463,26 @@ def create_app() -> Flask:
                         "embed_configured": embedder.configured,
                         "jev_configured": jev_configured(),
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
+
+    @app.get("/api/basics")
+    def basics_index():
+        """法律常识：模块卡片索引（元数据），公开访问。"""
+        return jsonify(basics_module.public_basics_index())
+
+    @app.get("/api/basics/<key>")
+    def basics_article(key):
+        """法律常识：单篇普法文章（含上下篇），未知模块 404，公开访问。"""
+        article = basics_module.public_basics_article(key)
+        if article is None:
+            abort(404, "未知的法律常识模块")
+        return jsonify(article)
+
+    @app.get("/basics/<key>")
+    def basics_article_page(key):
+        """法律常识独立文章页：/basics/<key>，与 Tab 卡片入口配套。"""
+        if basics_module.public_basics_article(key) is None:
+            abort(404, "未知的法律常识模块")
+        return send_from_directory(WEB_DIR, "basics.html")
 
     # ------------------------------------------------------------------
     # 账户体系：注册/登录/登出；业务数据按 u:<user_id> 身份键隔离
@@ -1230,6 +1269,10 @@ def create_app() -> Flask:
         "qa_to_court",        # 从问答回答进入推荐庭审
         "reasoning_scored",   # 评议提交说理并获得评分
         "learn_map_viewed",   # 查看学习地图
+        "basics_viewed",       # 查看法律常识索引
+        "basics_open_article", # 从索引卡片进入普法文章（含模块）
+        "basics_article_viewed", # 阅读普法文章（含模块）
+        "basics_ask_clicked",  # 从普法文章带问题进入问答（不含问题文本）
     })
     EVENT_MAX_BATCH = 20
     EVENT_SUMMARY_DAYS = 30

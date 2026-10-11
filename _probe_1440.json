@@ -1,0 +1,33 @@
+{
+  "innerWidth": 1440,
+  "bodyW": 1440,
+  "scrollW": 1440,
+  "wrap": {
+    "x": 130,
+    "y": 59,
+    "width": 1180,
+    "height": 2576.046875,
+    "top": 59,
+    "right": 1310,
+    "bottom": 2635.046875,
+    "left": 130
+  },
+  "over": [
+    {
+      "tag": "DIV",
+      "cls": "route-endpoint route-start",
+      "x": 250,
+      "w": 34,
+      "sw": 38,
+      "txt": "出发"
+    },
+    {
+      "tag": "DIV",
+      "cls": "route-endpoint route-end",
+      "x": 1190,
+      "w": 34,
+      "sw": 38,
+      "txt": "终点"
+    }
+  ]
+}

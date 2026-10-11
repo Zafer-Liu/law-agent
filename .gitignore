@@ -23,3 +23,6 @@ design/
 
 # Local verification screenshots (root)
 /*.png
+
+# Frontend (React landing) dependencies
+frontend/node_modules/

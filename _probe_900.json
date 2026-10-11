@@ -1,0 +1,49 @@
+{
+  "innerWidth": 900,
+  "bodyW": 900,
+  "scrollW": 900,
+  "wrap": {
+    "x": 0,
+    "y": 59,
+    "width": 900,
+    "height": 2771.953125,
+    "top": 59,
+    "right": 900,
+    "bottom": 2830.953125,
+    "left": 0
+  },
+  "over": [
+    {
+      "tag": "DIV",
+      "cls": "basics-block",
+      "x": 45,
+      "w": 810,
+      "sw": 836,
+      "txt": "主线与支线：一场官司可能走的路红色为主线（起诉 → 一审 →"
+    },
+    {
+      "tag": "DIV",
+      "cls": "basics-map",
+      "x": 45,
+      "w": 810,
+      "sw": 835,
+      "txt": "出发1起诉在哪里？第一步 · 管辖一般规矩是「原告就被告」："
+    },
+    {
+      "tag": "DIV",
+      "cls": "route-endpoint route-start",
+      "x": 226,
+      "w": 34,
+      "sw": 80,
+      "txt": "出发"
+    },
+    {
+      "tag": "DIV",
+      "cls": "route-endpoint route-end",
+      "x": 801,
+      "w": 34,
+      "sw": 80,
+      "txt": "终点"
+    }
+  ]
+}

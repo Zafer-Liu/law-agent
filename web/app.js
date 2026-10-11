@@ -27,6 +27,13 @@
   });
   document.body.classList.add("qa-active");
 
+  // ---- 报头日期条：当日刊期 ----
+  const editionDate = document.getElementById("edition-date");
+  if (editionDate) {
+    const now = new Date();
+    editionDate.textContent = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日 · 法晓特刊`;
+  }
+
   // ---- 问答 ----
   const form = document.getElementById("qa-form");
   const input = document.getElementById("qa-input");

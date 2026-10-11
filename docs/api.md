@@ -41,6 +41,53 @@
 }
 ```
 
+### `GET /api/basics`
+
+法律常识索引，公开访问、无需登录。只返回文章卡片所需的元数据，由「法律常识」Tab 的卡片列表消费。
+
+```json
+{
+  "updated_at": "2026年10月",
+  "disclaimer": "……普法常识，不构成法律意见……",
+  "modules": [
+    {"key": "procedure", "name": "诉讼流程", "sigil": "诉", "brief": "……", "block_count": 3},
+    {"key": "knowledge", "name": "诉讼基本知识", "sigil": "识", "brief": "……", "block_count": 1},
+    {"key": "loan", "name": "贷款与借钱", "sigil": "贷", "brief": "……", "block_count": 2},
+    {"key": "help", "name": "求助渠道", "sigil": "援", "brief": "……", "block_count": 2}
+  ]
+}
+```
+
+### `GET /api/basics/<key>`
+
+单篇普法文章，公开访问，返回该模块完整正文与上一篇/下一篇导航；未知模块返回 404。前端配对的独立文章页 `GET /basics/<key>`（返回 `web/basics.html`）由它驱动。
+
+```json
+{
+  "module": {"key": "procedure", "name": "诉讼流程", "sigil": "诉", "brief": "……",
+    "blocks": [
+      {"type": "route", "title": "主线与支线：一场官司可能走的路", "hint": "……",
+       "legend": {"title": "怎么看这张图", "text": "……"},
+       "stations": [{"key": "jurisdiction", "col": 1, "row": 2, "num": "1",
+                     "title": "起诉在哪里？", "tag": "管辖", "text": "……",
+                     "tips": ["……"], "ref": "……"}],
+       "roads": [{"from": "start", "to": "jurisdiction", "label": "决定起诉"},
+                 {"from": "trial", "to": "small", "label": "……", "branch": true},
+                 {"from": "trial", "to": "enforce", "label": "不上诉 · 十五日后生效", "via": "top"}]},
+      {"type": "faq", "title": "……", "items": [
+        {"q": "……", "a": "……", "ref": "……", "ask": "预填到问答输入框的问题"}]},
+      {"type": "cards", "items": [{"title": "利率有红线", "badge": "红线",
+                                    "level": "warn", "text": "……", "ref": "……"}]},
+      {"type": "notes", "items": ["清单条目"]}]},
+  "prev": null,
+  "next": {"key": "knowledge", "name": "诉讼基本知识"},
+  "updated_at": "2026年10月",
+  "disclaimer": "……"
+}
+```
+
+块类型共七种：`route`（`stations`/`roads`/`legend`）、`table`（`columns`/`rows`）、`cards`（`items`，可选 `badge`/`level`/`ref`/`ask`）、`faq`（`items`，可选 `ref`/`ask`）、`notes`（字符串清单）、`hotlines`（`items` 含 `number`/`name`/`text`）。`route` 描绘诉讼主线与支线：站点由 `col`/`row` 定位网格（主线在居中行从左到右，支线挂下方行），`branch` 站点与道路渲染为琥珀色支线，道路端点可用伪节点 `start`/`end`，`via: "top"` 表示越过主线行上方的弧线。`ask` 字段驱动「去问法晓」按钮：带问题跳回首页问答并预填该问题。结构由 `legalweb/basics.py` 在启动时校验，改坏 JSON 会直接启动失败。
+
 ## 2.1 账户接口
 
 认证基于 `law_session` Cookie（httpOnly、SameSite=Lax、30 天、HTTPS 下自动 Secure），令牌落库，重启部署不掉线。注册/登录可携带 `client_id`，把本浏览器匿名期的对话与宠物数据并入账户。
@@ -318,7 +365,7 @@ data: {"type":"result", ...}
 
 要求登录。批量上报白名单事件；每批最多入库 20 条，白名单外的事件被静默丢弃。事件属性只保留数值、布尔与 ≤120 字符的短字符串（≤12 个键），不收集问题内容。
 
-白名单事件：`qa_ask`、`answer_received`、`citation_open`、`feedback_submitted`、`court_case_open`、`court_start`、`court_complete`、`court_review`、`module_switch`、`account_export`、`matter_created`、`matter_completed`、`matter_review`、`matter_to_court`、`knowledge_marked`、`qa_to_court`、`reasoning_scored`、`learn_map_viewed`。
+白名单事件：`qa_ask`、`answer_received`、`citation_open`、`feedback_submitted`、`court_case_open`、`court_start`、`court_complete`、`court_review`、`module_switch`、`account_export`、`matter_created`、`matter_completed`、`matter_review`、`matter_to_court`、`knowledge_marked`、`qa_to_court`、`reasoning_scored`、`learn_map_viewed`、`basics_viewed`、`basics_open_article`、`basics_article_viewed`、`basics_ask_clicked`。
 
 ```json
 {"events": [{"name": "court_start", "props": {"case_id": "haicheng", "role": "juror"}}]}

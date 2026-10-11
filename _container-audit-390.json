@@ -1,0 +1,73 @@
+{
+  "qa": {
+    "x": 19.5,
+    "w": 351,
+    "scroll": 390,
+    "children": [
+      {
+        "cls": "qa-workspace",
+        "x": 19.5,
+        "w": 351
+      }
+    ]
+  },
+  "matter": {
+    "x": 0,
+    "w": 390,
+    "scroll": 390,
+    "children": [
+      {
+        "cls": "matter-workspace",
+        "x": 0,
+        "w": 390
+      }
+    ]
+  },
+  "court": {
+    "x": 0,
+    "w": 390,
+    "scroll": 390,
+    "children": [
+      {
+        "cls": "court-select",
+        "x": 0,
+        "w": 390
+      }
+    ]
+  },
+  "basics": {
+    "x": 0,
+    "w": 390,
+    "scroll": 390,
+    "children": [
+      {
+        "cls": "learn-wrap basics-wrap",
+        "x": 0,
+        "w": 390
+      }
+    ]
+  },
+  "learn": {
+    "x": 0,
+    "w": 390,
+    "scroll": 390,
+    "children": [
+      {
+        "cls": "learn-wrap",
+        "x": 0,
+        "w": 390
+      }
+    ]
+  },
+  "article": {
+    "article": {
+      "x": 0,
+      "w": 390
+    },
+    "map": {
+      "x": 19.5,
+      "w": 351
+    },
+    "scroll": 390
+  }
+}

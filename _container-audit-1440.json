@@ -1,0 +1,73 @@
+{
+  "qa": {
+    "x": 72,
+    "w": 1296,
+    "scroll": 1440,
+    "children": [
+      {
+        "cls": "qa-workspace",
+        "x": 72,
+        "w": 1296
+      }
+    ]
+  },
+  "matter": {
+    "x": 130,
+    "w": 1180,
+    "scroll": 1440,
+    "children": [
+      {
+        "cls": "matter-workspace",
+        "x": 202,
+        "w": 1036
+      }
+    ]
+  },
+  "court": {
+    "x": 130,
+    "w": 1180,
+    "scroll": 1440,
+    "children": [
+      {
+        "cls": "court-select",
+        "x": 202,
+        "w": 1036
+      }
+    ]
+  },
+  "basics": {
+    "x": 130,
+    "w": 1180,
+    "scroll": 1440,
+    "children": [
+      {
+        "cls": "learn-wrap basics-wrap",
+        "x": 202,
+        "w": 1036
+      }
+    ]
+  },
+  "learn": {
+    "x": 130,
+    "w": 1180,
+    "scroll": 1440,
+    "children": [
+      {
+        "cls": "learn-wrap",
+        "x": 202,
+        "w": 1036
+      }
+    ]
+  },
+  "article": {
+    "article": {
+      "x": 130,
+      "w": 1180
+    },
+    "map": {
+      "x": 202,
+      "w": 1036
+    },
+    "scroll": 1440
+  }
+}
