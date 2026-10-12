@@ -447,6 +447,75 @@
   });
   citationsClose.addEventListener("click", () => setCitationsOpen(false));
 
+  // ---- 法律原文：拖拽调整宽度（记忆到浏览器） ----
+  const citationsDragbar = document.getElementById("citations-dragbar");
+  const CITATIONS_WIDTH_KEY = "faxiao_citations_width";
+  const clampCitationsWidth = (width, workspace) =>
+    Math.round(Math.min(Math.max(width, 280),
+                        Math.max(280, Math.min(720, workspace * 0.55))));
+  try {
+    const saved = parseInt(localStorage.getItem(CITATIONS_WIDTH_KEY), 10);
+    if (saved >= 280) citationsPanel.style.setProperty("--citations-w", `${saved}px`);
+  } catch { /* 忽略 */ }
+  if (citationsDragbar) {
+    citationsDragbar.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      try { citationsDragbar.setPointerCapture(event.pointerId); }
+      catch { /* 指针捕获不可用时仍可拖动（触摸降级为跟随） */ }
+      citationsDragbar.classList.add("dragging");
+      const workspace = document.querySelector(".qa-workspace").getBoundingClientRect();
+      const move = (e) => {
+        const width = clampCitationsWidth(workspace.right - e.clientX, workspace.width);
+        citationsPanel.style.setProperty("--citations-w", `${width}px`);
+      };
+      const finish = () => {
+        citationsDragbar.removeEventListener("pointermove", move);
+        citationsDragbar.removeEventListener("pointerup", finish);
+        citationsDragbar.removeEventListener("pointercancel", finish);
+        citationsDragbar.classList.remove("dragging");
+        const value = parseInt(
+          citationsPanel.style.getPropertyValue("--citations-w"), 10);
+        if (value >= 280) {
+          try { localStorage.setItem(CITATIONS_WIDTH_KEY, String(value)); } catch { /* 忽略 */ }
+        }
+      };
+      citationsDragbar.addEventListener("pointermove", move);
+      citationsDragbar.addEventListener("pointerup", finish);
+      citationsDragbar.addEventListener("pointercancel", finish);
+    });
+  }
+
+  // ---- 法律原文：全屏（原生 Fullscreen API，被拒时铺满窗口） ----
+  const citationsFullscreen = document.getElementById("citations-fullscreen");
+  function syncCitationsFullscreen() {
+    const active = document.fullscreenElement === citationsPanel ||
+                   citationsPanel.classList.contains("window-full");
+    citationsFullscreen.setAttribute("aria-pressed", active ? "true" : "false");
+    citationsFullscreen.textContent = active ? "退出全屏" : "全屏";
+  }
+  if (citationsFullscreen) {
+    citationsFullscreen.addEventListener("click", async () => {
+      if (document.fullscreenElement === citationsPanel) {
+        await document.exitFullscreen().catch(() => {});
+        return;
+      }
+      if (citationsPanel.classList.contains("window-full")) {
+        citationsPanel.classList.remove("window-full");
+        syncCitationsFullscreen();
+        return;
+      }
+      try {
+        await citationsPanel.requestFullscreen();
+      } catch {
+        // 浏览器拒绝系统全屏（如 iframe 限制）：降级为铺满窗口
+        citationsPanel.classList.add("window-full");
+      }
+      syncCitationsFullscreen();
+    });
+    document.addEventListener("fullscreenchange", syncCitationsFullscreen);
+    syncCitationsFullscreen();
+  }
+
   // ---- 上下文统计条：摘要+尾部字符 / 压缩阈值；达到阈值后端自动压缩 ----
   const contextMeter = document.getElementById("context-meter");
   const contextMeterLabel = document.getElementById("context-meter-label");
@@ -1096,6 +1165,14 @@
     citationsRail.classList.toggle("open", Boolean(open));
     citationsPanel.hidden = !open;
     citationsToggle.setAttribute("aria-expanded", String(Boolean(open)));
+    if (!open && (document.fullscreenElement === citationsPanel ||
+                  citationsPanel.classList.contains("window-full"))) {
+      // 折叠面板时退出全屏，避免留下空白全屏层
+      citationsPanel.classList.remove("window-full");
+      if (document.fullscreenElement === citationsPanel) {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
   }
 
   refreshConversations();

@@ -1889,3 +1889,32 @@ body {
 .web-reader-toggle:hover:not(:disabled) { background: var(--bg); }
 .web-reader-toggle[aria-pressed="true"] { background: var(--ink); color: #F9F9F7; }
 .web-reader-toggle:disabled { opacity: .38; cursor: not-allowed; }
+
+/* ---- 法律原文：拖拽分割线 + 宽度记忆 + 全屏 ---- */
+.citations-rail { flex-direction: row; align-items: stretch; }
+.citations-dragbar {
+  display: none; width: 7px; cursor: col-resize; touch-action: none;
+  position: relative; flex: 0 0 auto; background: transparent;
+}
+.citations-dragbar::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 2px; right: 2px;
+  background: var(--ink); opacity: 0; transition: opacity .16s;
+}
+.citations-dragbar:hover::after, .citations-dragbar.dragging::after { opacity: .35; }
+.citations-dragbar.dragging { cursor: col-resize; }
+.citations-dragbar.dragging::after { opacity: 1; background: var(--primary); }
+.citations-rail.open .citations-dragbar { display: block; }
+.citations-panel { width: var(--citations-w, 360px); }
+.citations-head-actions { display: flex; align-items: center; gap: 6px; }
+.citations-fullscreen { min-height: 34px; padding: 4px 12px; font-size: 12px; }
+
+/* 原生全屏；被浏览器拒绝时降级为铺满窗口 */
+.citations-panel:fullscreen { width: 100%; height: 100%; border-left: none; }
+.citations-panel.window-full {
+  position: fixed; inset: 0; z-index: 300; width: 100%; height: 100%;
+  border-left: none; box-shadow: 0 10px 40px rgba(17,17,17,.25);
+}
+
+@media (max-width: 900px) {
+  .citations-dragbar { display: none !important; }
+}

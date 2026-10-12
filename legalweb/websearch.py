@@ -130,7 +130,9 @@ class WebSearchClient:
 
     def _post(self, payload: dict, notification=False):
         """One MCP POST; returns the JSON-RPC response message, or None for an
-        accepted notification. Raises WebSearchError or requests exceptions."""
+        accepted notification. Raises WebSearchError or requests exceptions.
+        The response's Mcp-Session-Id header (the spec's only session channel)
+        is stashed on self._last_headers for _ensure_session."""
         headers = {
             "Authorization": "Bearer " + self.key,
             "Accept": "application/json, text/event-stream",
@@ -139,6 +141,7 @@ class WebSearchClient:
             headers["Mcp-Session-Id"] = self._mcp_session
         with self.session.post(self.url, json=payload, headers=headers,
                                timeout=(5, 40), allow_redirects=False) as response:
+            self._last_headers = response.headers
             if response.status_code == 404 and self._mcp_session:
                 # Spec signal for an expired server session: re-initialize.
                 raise _SessionExpired("MCP session expired")
@@ -205,6 +208,10 @@ class WebSearchClient:
                     continue
                 self._raise_protocol_error(reply)
             session = reply.get("result", {}).get("sessionId") or ""
+            # 智谱 web_search_prime 等服务只把会话 ID 放在响应头（MCP 规范），
+            # 响应体没有 sessionId——两头都读，优先响应头。
+            header_session = getattr(self, "_last_headers", {}) or {}
+            session = (header_session.get("Mcp-Session-Id") or session) or ""
             self._mcp_session = _text(session, 200) or self._mcp_session
             break
         self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -326,7 +333,19 @@ class WebSearchClient:
                 except ValueError:
                     texts.append(text)  # free-form text, kept as one snippet
                     continue
-                sources.append(decoded)
+                # 智谱 web_search_prime 会把结果数组再包一层 JSON 字符串
+                # （text 块是 "[{\"title\":...}]"）：解到 list/dict 为止，最多三层。
+                for _ in range(2):
+                    if isinstance(decoded, (list, dict)):
+                        break
+                    try:
+                        decoded = json.loads(decoded)
+                    except (ValueError, TypeError):
+                        texts.append(text)
+                        decoded = None
+                        break
+                if decoded is not None:
+                    sources.append(decoded)
         rows = []
         for source in sources:
             for item in self._items(source):

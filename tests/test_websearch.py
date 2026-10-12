@@ -160,6 +160,39 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(first["headers"]["Authorization"], "Bearer sk-test")
         self.assertEqual(later["headers"].get("Mcp-Session-Id"), "sess-1")
 
+    def test_zhipu_double_encoded_text_and_header_session(self):
+        """智谱真实行为：text 块是双重 JSON 编码的字符串数组，会话 ID 只在响应头。"""
+
+        def handler(payload):
+            method = payload.get("method")
+            if method == "initialize":
+                response = FakeResponse(body=rpc({"protocolVersion": "2025-03-26"},
+                                                 rpc_id=payload["id"]))
+                response.headers = {"Content-Type": "application/json",
+                                    "Mcp-Session-Id": "header-sess-1"}
+                return response
+            if method == "notifications/initialized":
+                return FakeResponse(status_code=202)
+            if method == "tools/list":
+                schema = {"properties": {"search_query": {"type": "string"}}}
+                return FakeResponse(body=rpc({"tools": [{"name": "web_search_prime",
+                                                         "inputSchema": schema}]},
+                                             rpc_id=payload["id"]))
+            if method == "tools/call":
+                inner = json.dumps({"search_result": RESULTS}, ensure_ascii=False)
+                text = json.dumps(inner, ensure_ascii=False)  # 第二层编码
+                return FakeResponse(body=rpc({"content": [{"type": "text", "text": text}],
+                                              "isError": False}, rpc_id=payload["id"]))
+            raise AssertionError(method)
+
+        client = self.make_client(handler)
+        rows = client.search(QUERY, 3)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], TITLE)
+        self.assertEqual(rows[0]["url"], "https://example.com/law")
+        # 会话 ID 优先取响应头（响应体没有 sessionId）
+        self.assertEqual(client._mcp_session, "header-sess-1")
+
     def test_sse_bodied_responses_are_parsed(self):
         def handler(payload):
             method = payload.get("method")

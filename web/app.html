@@ -141,6 +141,8 @@
       </section>
 
       <aside id="citations-rail" class="citations-rail" aria-label="法律原文">
+        <div id="citations-dragbar" class="citations-dragbar" role="separator"
+          aria-orientation="vertical" aria-label="拖拽调整法律原文宽度"></div>
         <button id="citations-toggle" class="citations-toggle" type="button"
           aria-controls="qa-citations" aria-expanded="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 4.75h9A1.75 1.75 0 0 1 16.25 6.5v12.75h-9A1.75 1.75 0 0 1 5.5 17.5V4.75Z"/><path d="M16.25 7.25H18.5v12h-9"/></svg>
@@ -150,9 +152,13 @@
         <section id="qa-citations" class="citations-panel" aria-labelledby="citations-title" hidden>
           <div class="citations-head">
             <h3 id="citations-title">法律原文 <span id="citations-panel-count" class="citations-panel-count"></span></h3>
-            <button id="citations-close" class="close-btn" type="button" aria-label="折叠法律原文">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
-            </button>
+            <div class="citations-head-actions">
+              <button id="citations-fullscreen" class="text-btn citations-fullscreen" type="button"
+                aria-pressed="false" aria-label="全屏查看法律原文">全屏</button>
+              <button id="citations-close" class="close-btn" type="button" aria-label="折叠法律原文">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 7 7-7 7"/></svg>
+              </button>
+            </div>
           </div>
           <div id="citations-list" class="citations-list"></div>
         </section>
