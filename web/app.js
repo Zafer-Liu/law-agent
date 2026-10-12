@@ -88,6 +88,86 @@
     try { return localStorage.getItem(PET_MEMORY_KEY) === "1"; } catch { return false; }
   }
 
+  // ---- 错误日志上报：AI 回答失败/中断时弹窗询问，单独存储供后续优化 ----
+  const errorReportModal = document.getElementById("error-report-modal");
+  const errorReportDetail = document.getElementById("error-report-detail");
+  const errorReportSend = document.getElementById("error-report-send");
+  let errorReportPending = null;
+
+  function closeErrorReport() {
+    errorReportPending = null;
+    errorReportModal.hidden = true;
+  }
+
+  function offerErrorReport(question, errorText, context) {
+    if (!errorReportModal || errorReportPending) return; // 同一次失败只问一次
+    errorReportPending = { question, error: errorText, context: context || {} };
+    if (errorReportDetail) {
+      errorReportDetail.textContent = String(errorText || "").slice(0, 200);
+    }
+    errorReportModal.hidden = false;
+    errorReportSend.focus();
+  }
+
+  if (errorReportModal) {
+    errorReportModal.querySelectorAll("[data-error-report-cancel]")
+      .forEach((el) => el.addEventListener("click", closeErrorReport));
+    errorReportSend.addEventListener("click", async () => {
+      const payload = errorReportPending;
+      closeErrorReport();
+      if (!payload) return;
+      try {
+        const res = await fetch(API_BASE + "/api/error-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: "qa_error",
+            question: payload.question || "",
+            error: payload.error || "",
+            context: payload.context,
+          }),
+        });
+        window.toast(res.ok ? "已发送，感谢反馈" : "发送失败，请稍后再试");
+      } catch {
+        window.toast("发送失败，请稍后再试");
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !errorReportModal.hidden) closeErrorReport();
+    });
+  }
+
+  // ---- 回答模式（普通/专业）：默认普通，浏览器偏好 ----
+  const QA_MODE_KEY = "faxiao_qa_mode";
+  const qaModeButtons = {
+    ordinary: document.getElementById("qa-mode-ordinary"),
+    professional: document.getElementById("qa-mode-professional"),
+  };
+
+  function qaMode() {
+    let saved = "ordinary";
+    try { saved = localStorage.getItem(QA_MODE_KEY) || "ordinary"; } catch { /* 忽略 */ }
+    return saved === "professional" ? "professional" : "ordinary";
+  }
+
+  function renderQaMode(mode = qaMode()) {
+    Object.entries(qaModeButtons).forEach(([key, btn]) => {
+      if (btn) btn.setAttribute("aria-pressed", String(key === mode));
+    });
+  }
+
+  Object.entries(qaModeButtons).forEach(([key, btn]) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      try {
+        if (key === "professional") localStorage.setItem(QA_MODE_KEY, "professional");
+        else localStorage.removeItem(QA_MODE_KEY);
+      } catch { /* 隐私模式下忽略持久化失败 */ }
+      renderQaMode(key);
+    });
+  });
+  renderQaMode();
+
   // ---- 网页读取开关：默认关闭，浏览器偏好；服务端未配置 Key 时不可用 ----
   const WEB_SEARCH_KEY = "faxiao_web_search_enabled";
   const webSearchToggle = document.getElementById("web-search-toggle");
@@ -597,6 +677,7 @@
           request_id: requestId,
           remember: petMemoryEnabled(),
           web_search: webSearchEnabled(),
+          mode: qaMode(),
         }),
       });
 
@@ -609,7 +690,10 @@
           return;
         }
         const err = await res.json().catch(() => ({}));
-        stream.fail(err.error || "暂时无法回答，请稍后再试。");
+        const failText = err.error || "暂时无法回答，请稍后再试。";
+        stream.fail(failText);
+        offerErrorReport(question, failText,
+          { mode: qaMode(), conversation_id: conversationId, request_id: requestId });
         window.dispatchEvent(new CustomEvent("pet:error"));
         return;
       }
@@ -642,7 +726,10 @@
           });
           window.dispatchEvent(new CustomEvent("pet:answer", { detail: { pet: event.pet } }));
         } else if (event.type === "error") {
-          stream.fail(event.error || "暂时无法回答，请稍后再试。");
+          const failText = event.error || "暂时无法回答，请稍后再试。";
+          stream.fail(failText);
+          offerErrorReport(question, failText,
+            { mode: qaMode(), conversation_id: conversationId, request_id: requestId });
           window.dispatchEvent(new CustomEvent("pet:error"));
         }
       };
@@ -662,6 +749,8 @@
       if (resultEvent) await refreshConversations();
     } catch (err) {
       stream.fail("网络错误，请重试。");
+      offerErrorReport(question, "网络错误，请重试。",
+        { mode: qaMode(), conversation_id: conversationId, request_id: requestId });
       window.dispatchEvent(new CustomEvent("pet:error"));
     } finally {
       sending = false;
@@ -1395,7 +1484,7 @@
     value = value.replace(/`([^`\n]+)`/g, (_, code) => hold(`<code>${escapeHtml(code)}</code>`));
     value = value.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
       (_, label, url) => hold(`<a href="${escapeAttribute(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`));
-    value = value.replace(/\[(C\d+)\]/g, (_, label) => hold(
+    value = value.replace(/\[([CW]\d+)\]/g, (_, label) => hold(
       `<button type="button" class="citation-ref" data-label="${label}" aria-label="查看引用 ${label}">[${label}]</button>`
     ));
     let html = escapeHtml(value);
@@ -1478,7 +1567,8 @@
         link.href = c.url;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.textContent = "查看北大法宝原文 ↗";
+        link.textContent = (c.source || "").startsWith("联网搜索")
+          ? "查看网页原文 ↗" : "查看北大法宝原文 ↗";
         item.appendChild(link);
       }
       citationsList.appendChild(item);

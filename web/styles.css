@@ -1918,3 +1918,34 @@ body {
 @media (max-width: 900px) {
   .citations-dragbar { display: none !important; }
 }
+
+/* ---- 回答模式分段选择（composer 底部，联网搜索左侧） ---- */
+.qa-mode-group { display: inline-flex; align-items: center; }
+.qa-mode-btn {
+  min-height: 34px; padding: 5px 12px; border: 1px solid var(--ink); background: var(--surface);
+  color: var(--text); font-size: 12px; font-weight: 600; letter-spacing: .06em; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.qa-mode-btn + .qa-mode-btn { border-left-width: 0; }
+.qa-mode-btn:hover { background: var(--bg); }
+.qa-mode-btn[aria-pressed="true"] { background: var(--ink); color: #F9F9F7; }
+.qa-mode-btn:focus-visible { outline: 2px solid var(--primary-dark); outline-offset: 2px; z-index: 1; }
+
+/* ---- 错误日志上报弹窗（报纸美学） ---- */
+.error-report-modal { position: fixed; inset: 0; z-index: 320; display: grid; place-items: center; }
+.error-report-backdrop { position: absolute; inset: 0; background: rgba(17,17,17,.45); }
+.error-report-card {
+  position: relative; z-index: 1; width: min(440px, calc(100vw - 32px));
+  background: var(--surface); border: 2px solid var(--ink);
+  box-shadow: 6px 6px 0 rgba(17,17,17,.85);
+}
+.error-report-head { background: var(--ink); color: #F9F9F7; padding: 12px 18px; }
+.error-report-head h3 { font-size: 15px; letter-spacing: .04em; }
+.error-report-text { padding: 16px 18px 0; font-size: 14px; line-height: 1.7; color: var(--text); }
+.error-report-detail {
+  margin: 10px 18px 0; padding: 8px 10px; border: 1px solid var(--border);
+  background: var(--bg); font-size: 12px; line-height: 1.6; color: var(--text-muted);
+  max-height: 96px; overflow-y: auto; word-break: break-all; white-space: pre-wrap;
+}
+.error-report-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 18px 18px; }
+.error-report-actions .primary-btn, .error-report-actions .outline-btn { width: auto; min-height: 40px; padding: 8px 18px; }

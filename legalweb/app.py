@@ -8,11 +8,15 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
+import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from pathlib import Path
+from queue import Empty as QueueEmpty
+from queue import Queue
 from threading import BoundedSemaphore, Lock
 
 from flask import (
@@ -50,22 +54,58 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
 class _RingLogHandler(logging.Handler):
-    """内存环形日志：设置面板展示最近的运行日志（不落盘、重启即清空）。"""
+    """运行日志：内存环形缓冲（即时查看）+ 持久化队列（后台批量落库，7 天循环删除）。"""
 
     def __init__(self, capacity: int = 200):
         super().__init__()
         self.records = deque(maxlen=capacity)
+        self.sink = Queue()
 
     def emit(self, record):
         try:
-            self.records.append({
-                "time": datetime.now().strftime("%m-%d %H:%M:%S"),
+            entry = {
+                "time": datetime.now().isoformat(timespec="seconds"),
                 "level": record.levelname,
                 "name": record.name.split(".")[-1],
                 "message": record.getMessage(),
+            }
+            self.records.append({
+                **entry,
+                "time": entry["time"][5:16].replace("T", " "),  # 面板展示 MM-DD HH:MM:SS
             })
+            self.sink.put(entry)
         except Exception:  # noqa: BLE001 — 日志钩子永不影响主链路
             pass
+
+
+def _start_log_flusher(database: Database, ring: "_RingLogHandler",
+                       interval: float = 3.0) -> threading.Thread:
+    """后台线程：把环形 handler 队列里的日志批量写入 app_logs，
+    并删除 7 天前的记录（循环清理）。守护线程，进程退出即停。"""
+    def run():
+        while True:
+            try:
+                time.sleep(interval)
+                batch = []
+                while True:
+                    try:
+                        batch.append(ring.sink.get_nowait())
+                    except QueueEmpty:
+                        break
+                with database.connect() as db:
+                    if batch:
+                        db.executemany(
+                            "INSERT INTO app_logs (time, level, name, message)"
+                            " VALUES (?,?,?,?)",
+                            [(r["time"], r["level"], r["name"], r["message"][:2000])
+                             for r in batch])
+                    db.execute("DELETE FROM app_logs"
+                               " WHERE time < datetime('now', '-7 days')")
+            except Exception:  # noqa: BLE001 — 后台清理永不影响主链路
+                pass
+    thread = threading.Thread(target=run, name="app-log-flusher", daemon=True)
+    thread.start()
+    return thread
 
 
 _RING_LOG = _RingLogHandler()
@@ -421,6 +461,8 @@ def create_app() -> Flask:
     if _RING_LOG not in legal_logger.handlers:
         _RING_LOG.setLevel(logging.INFO)
         legal_logger.addHandler(_RING_LOG)
+    # 运行日志持久化：后台批量落库 + 7 天循环删除
+    _start_log_flusher(database, _RING_LOG)
     seed_sources(database, embedder)
     if not qa_llm.configured:
         LOG.warning("法律问答模型未配置：请设置 LAW_LLM_* 环境变量")
@@ -804,7 +846,22 @@ def create_app() -> Flask:
     @app.get("/api/logs")
     def recent_logs():
         require_admin()
-        return jsonify({"logs": list(reversed(_RING_LOG.records))})
+        # 优先读持久化日志（7 天窗口内最近 500 条）；刚启动未落库时回退内存环形
+        try:
+            with database.connect() as db:
+                rows = db.execute(
+                    "SELECT time, level, name, message FROM app_logs"
+                    " WHERE time >= datetime('now', '-7 days')"
+                    " ORDER BY id DESC LIMIT 500").fetchall()
+        except sqlite3.Error:
+            rows = []
+        if rows:
+            logs = [{"time": (row["time"] or "")[:16].replace("T", " "),
+                     "level": row["level"], "name": row["name"],
+                     "message": row["message"]} for row in rows]
+        else:
+            logs = list(reversed(_RING_LOG.records))
+        return jsonify({"logs": logs})
 
     # ------------------------------------------------------------------
     # 知识库
@@ -1334,6 +1391,52 @@ def create_app() -> Flask:
         return jsonify({"days": EVENT_SUMMARY_DAYS, "events": [dict(row) for row in rows]})
 
     # ------------------------------------------------------------------
+    # 错误日志收集：AI 回答失败/中断时用户主动上报，单独存储供优化
+    # ------------------------------------------------------------------
+    ERROR_KINDS = ("qa_error", "stream_error")
+
+    @app.post("/api/error-report")
+    def submit_error_report():
+        if not _auth_rate_ok():
+            abort(429, "上报太频繁，请稍后再试")
+        data = request.get_json(force=True, silent=True) or {}
+        kind = (data.get("kind") or "qa_error").strip()
+        if kind not in ERROR_KINDS:
+            abort(400, "未知的错误类型")
+        question = data.get("question")
+        error = data.get("error")
+        context = data.get("context")
+        question = question.strip()[:2000] if isinstance(question, str) else ""
+        error = error.strip()[:1000] if isinstance(error, str) else ""
+        if not error:
+            abort(400, "错误信息不能为空")
+        if not isinstance(context, dict):
+            context = {}
+        user = current_user()
+        with database.connect() as db:
+            db.execute(
+                "INSERT INTO error_reports (user_id, kind, question, error,"
+                " context, created_at) VALUES (?,?,?,?,?,?)",
+                (user_identity(user) if user else "", kind, question, error,
+                 json.dumps({key: str(value)[:120] for key, value in
+                             list(context.items())[:12]}, ensure_ascii=False),
+                 now_iso()))
+        LOG.info("收到错误上报 · kind=%s · user=%s", kind,
+                 user_identity(user) if user else "anonymous")
+        return jsonify({"ok": True})
+
+    @app.get("/api/error-reports")
+    def list_error_reports():
+        require_admin()
+        with database.connect() as db:
+            rows = db.execute(
+                "SELECT id, user_id, kind, question, error, context, created_at"
+                " FROM error_reports ORDER BY id DESC LIMIT 200").fetchall()
+        return jsonify({"reports": [
+            {**dict(row), "context": json.loads(row["context"] or "{}")}
+            for row in rows]})
+
+    # ------------------------------------------------------------------
     # 法律问题工作台：结构化案情采集 → 事项档案（分析报告 + 推荐庭审）
     # ------------------------------------------------------------------
     def matter_public(row, *, with_result=True) -> dict:
@@ -1638,6 +1741,7 @@ def create_app() -> Flask:
         identity = user_identity(require_user())
         remember_pet = data.get("remember") is True
         use_web_search = data.get("web_search") is True
+        qa_mode = text_value(data, "mode", limit=32) or "ordinary"
         if not 2 <= len(question) <= MAX_QUESTION:
             abort(400, "问题长度需在 2-2000 字之间")
         if not qa_llm.configured:
@@ -1713,6 +1817,8 @@ def create_app() -> Flask:
                             "text": "\n".join(part for part in (row["title"], row["snippet"]) if part),
                             "url": row["url"],
                             "timeliness": "",
+                            # 联网搜索证据用 W 编号，与本地法条 C 编号区分
+                            "label_prefix": "W",
                         })
                 except WebSearchError as exc:
                     LOG.warning("联网搜索失败，已跳过：%s", exc)
@@ -1725,7 +1831,7 @@ def create_app() -> Flask:
             # （系统提示会要求标注"基于一般法律知识、无条文依据"），grounded=False。
             evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
             messages = qa.build_messages(question, evidence, previous, recent_answers,
-                                         conversation_summary=summary)
+                                         conversation_summary=summary, mode=qa_mode)
             yield sse({"type": "status", "text": "正在生成回答…", "backend": backend})
             buffer = []
             try:

@@ -107,6 +107,25 @@ CREATE TABLE IF NOT EXISTS events (
     props TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time TEXT NOT NULL,
+    level TEXT NOT NULL,
+    name TEXT NOT NULL,
+    message TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS app_logs_time ON app_logs(time);
+-- 错误日志：AI 回答失败/中断时用户主动上报，单独存储供后续针对性优化
+CREATE TABLE IF NOT EXISTS error_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    question TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    context TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS error_reports_time ON error_reports(created_at);
 CREATE INDEX IF NOT EXISTS events_name_time ON events(name, created_at);
 CREATE TABLE IF NOT EXISTS matters (
     id TEXT PRIMARY KEY,

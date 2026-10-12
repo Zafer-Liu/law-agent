@@ -447,7 +447,7 @@ class _FakeLLM:
     configured = True
 
     def stream(self, *_a, **_k):
-        yield "delta", "依据如下。[C1][C2]"
+        yield "delta", "依据如下。[C1][W1]"
 
     def complete(self, *_a, **_k):
         return "摘要"
@@ -493,6 +493,11 @@ class AskWebSearchTests(unittest.TestCase):
         result, statuses = _ask(self.client, QUERY + " 最新条文是什么", web_search=True)
         urls = [c.get("url") for c in result["citations"]]
         self.assertIn("https://example.com/law", urls)
+        # 联网搜索证据使用 W 编号，与本地法条 C 编号区分
+        web_ref = next(c for c in result["citations"]
+                       if (c.get("label") or "").startswith("W"))
+        self.assertEqual(web_ref["label"], "W1")
+        self.assertEqual(web_ref["url"], "https://example.com/law")
         self.assertTrue(any("正在联网搜索" in s.get("text", "") for s in statuses))
         self.assertIn("联网搜索", result["notice"])
 
@@ -500,6 +505,53 @@ class AskWebSearchTests(unittest.TestCase):
         result, _ = _ask(self.client, QUERY + " 最新条文是什么", web_search=False)
         urls = [c.get("url") for c in result["citations"]]
         self.assertNotIn("https://example.com/law", urls)
+
+class _CaptureLLM:
+    configured = True
+
+    def __init__(self):
+        self.messages = None
+
+    def stream(self, messages, *_a, **_k):
+        self.messages = messages
+        yield "delta", "好的。[C1]"
+
+    def complete(self, *_a, **_k):
+        return "摘要"
+
+
+class PersonaModeTests(unittest.TestCase):
+    def setUp(self):
+        self.llm = _CaptureLLM()
+        directory = tempfile.mkdtemp()
+        with patch.dict(os.environ, {"LAW_DATA_DIR": directory}),                 patch("legalweb.app.seed_sources"),                 patch("legalweb.app.AUTH_RATE_MAX", 10_000),                 patch("legalweb.app.LLMClient", return_value=self.llm):
+            self.client = create_app().test_client()
+        self.client.post("/api/auth/register",
+                         json={"username": "u1", "password": "secret123"})
+
+    def _ask(self, mode):
+        body = {"question": "劳动合同解除后的经济补偿怎么算？",
+                "request_id": "req-mode-0001", "remember": False}
+        if mode is not None:
+            body["mode"] = mode
+        with patch("legalweb.app.retrieve", return_value={
+                "hits": [GROUNDED_LAW_HIT], "backend": "lexical+fts5", "degraded": True}):
+            response = self.client.post("/api/ask", json=body)
+        _ = response.data  # SSE 惰性生成：读 body 才会真正调用 LLM
+        return response.status_code
+
+    def test_professional_mode_uses_professional_prompt(self):
+        self.assertEqual(self._ask("professional"), 200)
+        system = self.llm.messages[0]["content"]
+        self.assertIn("法学院学生", system)
+        self.assertIn("请求权基础", system)
+
+    def test_ordinary_and_invalid_fall_back(self):
+        self.assertEqual(self._ask(None), 200)
+        self.assertIn("面向普通公众", self.llm.messages[0]["content"])
+        self.assertEqual(self._ask("nonsense-mode"), 200)
+        self.assertIn("面向普通公众", self.llm.messages[0]["content"])
+
 
     def test_config_reports_flag(self):
         data = self.client.get("/api/config").get_json()

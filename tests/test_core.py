@@ -214,3 +214,45 @@ class CoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebCitationLabelTests(unittest.TestCase):
+    """联网搜索证据 W 编号与混合引用清理。"""
+
+    LAW_HIT = {
+        "id": 1, "source_title": "劳动合同法", "section": "第四十七条",
+        "ordinal": 0, "text": "经济补偿按劳动者在本单位工作的年限计算。",
+    }
+    WEB_HIT = {
+        "id": "web:x", "source_title": "联网搜索 · 示例网", "section": "标题",
+        "ordinal": 0, "text": "网页摘要内容。", "url": "https://example.com/a",
+        "timeliness": "", "label_prefix": "W",
+    }
+
+    def test_web_hits_get_w_labels(self):
+        refs = Evidence([self.LAW_HIT, self.WEB_HIT], "经济补偿").refs
+        labels = {ref["label"] for ref in refs}
+        self.assertIn("C1", labels)
+        self.assertIn("W1", labels)
+        self.assertNotIn("C2", labels)
+        web_ref = next(r for r in refs if r["label"].startswith("W"))
+        self.assertEqual(web_ref["url"], "https://example.com/a")
+
+    def test_sanitize_supports_w_and_mixed_groups(self):
+        result = sanitize_citations(
+            "法条依据[C1]，网络补充[W1]，混合【C1、W1】。",
+            {"C1", "W1"},
+        )
+        self.assertEqual(result["content"], "法条依据[C1]，网络补充[W1]，混合[C1][W1]。")
+        self.assertEqual(result["used"], ["C1", "W1"])
+        self.assertEqual(result["removed"], 0)
+
+    def test_sanitize_removes_invalid_w(self):
+        result = sanitize_citations("依据[W9][W1]。", {"W1"})
+        self.assertEqual(result["content"], "依据[W1]。")
+        self.assertEqual(result["used"], ["W1"])
+        self.assertEqual(result["removed"], 1)
+
+    def test_used_ordering_c_first_then_w(self):
+        result = sanitize_citations("[W2][C2][W1][C1]。", {"C1", "C2", "W1", "W2"})
+        self.assertEqual(result["used"], ["C1", "C2", "W1", "W2"])

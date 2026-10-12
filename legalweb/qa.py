@@ -3,23 +3,12 @@
 import json
 import re
 
+from .personas import persona_prompt
 from .rag import lexical_score
 
-SYSTEM_PROMPT = """你是一名严谨的中文法律咨询助手「法晓」，面向普通公众提供普法咨询。用户大多不懂法律，你的首要目标是让每次提问都得到有用的回答，禁止以"知识库未收录"为由拒绝回答或只做免责声明。
-
-回答规则：
-1. 有证据片段（法律法规节选，编号 C1、C2…）时，核心法律结论必须依据证据作答，引用在相应句末用 [C1] 形式标注，可一句多引。
-2. 证据没有覆盖的部分（如实务操作、取证方法、流程步骤），继续基于通用的法律常识和实践经验回答，并在该部分开头标注"**以下为一般法律实务提示（未附具体条文依据）**"。禁止在这类内容里编造具体条文号、司法解释名称或虚构案例；不确定的内容要如实说明"各地实践可能有差异"。
-3. 完全没有证据片段时，直接依据你掌握的法律知识回答，在回答开头用一句话说明"本次未检索到可直接引用的条文，以下基于一般法律知识作答（不构成法律意见）"，然后照常完整回答。
-4. 结构：先用一两句话直接回答，再分点展开解释（是什么/怎么认定/怎么办），最后给可操作的实务建议（步骤化，普通人能照做）。
-5. 信息不足无法给出针对性建议时，先给出一般性回答，再追问 1-2 个关键信息（如合同类型、所处阶段），不要只反问不作答。
-6. 涉及具体纠纷时提醒：本回答是一般性法律信息，不构成法律意见，重要事项请咨询执业律师。
-7. 简体中文，通俗准确，避免堆砌术语；条文原文只在必要时引用关键句。
-8. 使用 Markdown 组织回答：可使用二、三级标题、列表、加粗和代码格式；不要输出 HTML。"""
-
-CITATION_RE = re.compile(r"\[(C\d+)\]")
-GROUPED_CITATION_RE = re.compile(r"[\[【]((?:C\d+\s*[,，、;；]\s*)+C\d+)[\]】]")
-FULLWIDTH_CITATION_RE = re.compile(r"【(C\d+)】")
+CITATION_RE = re.compile(r"\[([CW]\d+)\]")
+GROUPED_CITATION_RE = re.compile(r"[\[【]((?:[CW]\d+\s*[,，、;；]\s*)+[CW]\d+)[\]】]")
+FULLWIDTH_CITATION_RE = re.compile(r"【([CW]\d+)】")
 ARTICLE_RE = re.compile(
     r"(?m)^(?:#{1,6}\s*)?(第[一二三四五六七八九十百千万零〇两\d]+条"
     r"(?:之[一二三四五六七八九十百千万零〇两\d]+)?)\s*"
@@ -123,10 +112,13 @@ class Evidence:
         ))
 
         self.refs = []
-        for index, item in enumerate(ranked, 1):
+        counters = {"C": 0, "W": 0}
+        for item in ranked:
             item.pop("_score", None)
             item.pop("_order", None)
-            item["label"] = f"C{index}"
+            prefix = "W" if item.pop("label_prefix", "") == "W" else "C"
+            counters[prefix] += 1
+            item["label"] = f"{prefix}{counters[prefix]}"
             self.refs.append(item)
 
     @property
@@ -135,7 +127,7 @@ class Evidence:
 
 
 def build_messages(question, evidence: Evidence, previous_questions, recent_answers,
-                   conversation_summary=None):
+                   conversation_summary=None, mode="ordinary"):
     context = {
         "question": question,
         "evidence": [{"label": ref["label"], "section": ref["section"],
@@ -148,7 +140,7 @@ def build_messages(question, evidence: Evidence, previous_questions, recent_answ
         context["previous_questions_for_resolving_pronouns_only"] = [q[:800] for q in previous_questions[-12:]]
     if recent_answers:
         context["recent_answer_summaries_for_continuity_only"] = [a[:1500] for a in recent_answers[-6:]]
-    return [{"role": "system", "content": SYSTEM_PROMPT},
+    return [{"role": "system", "content": persona_prompt(mode)},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
 
 
@@ -159,7 +151,7 @@ def sanitize_citations(text: str, valid_labels: set) -> dict:
     text = FULLWIDTH_CITATION_RE.sub(r"[\1]", text)
 
     def expand_group(match):
-        labels = re.findall(r"C\d+", match.group(1))
+        labels = re.findall(r"[CW]\d+", match.group(1))
         return "".join(f"[{label}]" for label in labels)
 
     text = GROUPED_CITATION_RE.sub(expand_group, text)
@@ -174,4 +166,6 @@ def sanitize_citations(text: str, valid_labels: set) -> dict:
 
     clean = CITATION_RE.sub(repl, text).strip()
     used = set(CITATION_RE.findall(clean))
-    return {"content": clean, "used": sorted(used, key=lambda x: int(x[1:])), "removed": removed}
+    # C 组（本地法条）在前、W 组（联网搜索）在后，各组内按序号排列。
+    return {"content": clean, "removed": removed,
+            "used": sorted(used, key=lambda x: (x[0] != "C", int(x[1:])))}

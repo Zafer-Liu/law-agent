@@ -124,6 +124,13 @@
                 <span class="context-meter-track"><span id="context-meter-fill" class="context-meter-fill"></span></span>
               </div>
               <span class="disclaimer">Enter 发送 · Shift + Enter 换行</span>
+              <div id="qa-mode-group" class="qa-mode-group" role="group"
+                aria-label="回答模式">
+                <button type="button" id="qa-mode-ordinary" class="qa-mode-btn"
+                  aria-pressed="true" title="面向普通人的通俗解答">普通</button>
+                <button type="button" id="qa-mode-professional" class="qa-mode-btn"
+                  aria-pressed="false" title="面向法学院学生/律师/法务的专业分析">专业</button>
+              </div>
               <button type="button" id="web-search-toggle" class="web-reader-toggle"
                 aria-pressed="false" title="开启后，自动联网搜索作为补充依据（未配置时不可用）"
                 disabled>
@@ -656,6 +663,24 @@
     </div>
   </div>
 
+  <!-- 错误日志上报弹窗：AI 回答失败/中断时询问用户是否发送错误日志 -->
+  <div id="error-report-modal" class="error-report-modal" hidden>
+    <div class="error-report-backdrop" data-error-report-cancel></div>
+    <div class="error-report-card" role="dialog" aria-modal="true"
+      aria-labelledby="error-report-title">
+      <div class="error-report-head">
+        <h3 id="error-report-title">回答中断了</h3>
+      </div>
+      <p class="error-report-text">
+        是否发送本次错误日志帮助改进？你的问题与错误信息将被单独记录，仅用于排查和优化。
+      </p>
+      <p class="error-report-detail" id="error-report-detail"></p>
+      <div class="error-report-actions">
+        <button type="button" class="outline-btn" data-error-report-cancel>取消</button>
+        <button type="button" class="primary-btn" id="error-report-send">发送错误日志</button>
+      </div>
+    </div>
+  </div>
   <script src="assets/app.js"></script>
   <script src="assets/matter.js"></script>
   <script src="assets/learn.js"></script>
