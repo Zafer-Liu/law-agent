@@ -331,7 +331,7 @@ a.brand { text-decoration: none; color: inherit; }
 .composer-dock { flex: 0 0 auto; padding: 12px clamp(24px, 4vw, 48px) 18px; background: linear-gradient(to bottom, rgba(252,251,250,0), #F9F9F7 18px); }
 .composer { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 0px; background: var(--surface); box-shadow: var(--shadow-md); }
 .composer textarea {
-  width: 100%; min-height: 64px; padding: 8px 10px; border: 0; border-radius: 0px;
+  width: 100%; min-height: 42px; padding: 8px 10px; border: 0; border-radius: 0px;
   font-family: var(--font); font-size: 14px; resize: none; outline: none;
   transition: box-shadow .2s; background: var(--surface); caret-color: var(--primary);
 }
@@ -1048,7 +1048,7 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
   .composer-bottom { align-items: flex-end; gap: 12px; }
   .disclaimer { flex: 1; min-width: 0; max-width: 180px; line-height: 1.5; }
   .send-btn { flex: 0 0 auto; padding-inline: 16px; }
-  .composer textarea { min-height: 56px; font-size: 16px; }
+  .composer textarea { min-height: 38px; font-size: 16px; }
   .chat-title-group h2 { max-width: 185px; }
   .case-card { padding: 22px 20px; }
 }

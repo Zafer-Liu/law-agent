@@ -2,34 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "preview",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["preview_server.py", "8123"],
-      "port": 8123
-    },
-    {
-      "name": "backend",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "legalweb"],
-      "port": 8124,
-      "env": {
-        "LAW_PKULAW_TOKEN": "1b7782e8-a198-3a43-ae6f-800dfd75508e"
-      }
-    },
-    {
-      "name": "backend-verify",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "legalweb"],
-      "port": 8125,
-      "env": {
-        "LAW_PORT": "8125",
-        "LAW_PKULAW_TOKEN": "1b7782e8-a198-3a43-ae6f-800dfd75508e"
-      }
-    },
-    {
-      "name": "flask-5000",
-      "url": "http://127.0.0.1:5000",
-      "port": 5000
+      "name": "static-web",
+      "runtimeExecutable": "E:/Tool/Python313/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8899", "--directory", "web"],
+      "port": 8899
     }
   ]
 }
