@@ -20,6 +20,9 @@ from .agents import JUDGE_BADGE, build_roles
 STAGE_ORDER = ["opening", "investigation", "mid_review", "debate", "poll2",
                "statement", "deliberation"]
 
+# 陪审员在法庭调查后最多可发问的次数（含追问），问完再记录阶段性预判
+MAX_JUROR_QUESTIONS = 3
+
 PLAYER_ROLES = {
     "audience": {"name": "旁听观众", "badge": "观"},
     "juror": {"name": "人民陪审员", "badge": "陪"},
@@ -236,11 +239,20 @@ class TrialEngine:
                 if self.player_role != "juror":
                     yield from self._role_checkpoint("investigation", "debate")
                     return
-                yield judge_line("法庭调查结束。在进入法庭辩论之前，请人民陪审员记录阶段性意见，"
-                                 "并可就卷宗证据向控辩双方发问。")
+                if from_stage != "mid_review":
+                    # 首次进入：发问是法庭调查的延伸，先问后判（法释〔2019〕5号第十一条）
+                    yield judge_line("法庭调查结束。在记录阶段性意见之前，人民陪审员可先就卷宗证据"
+                                     "与庭审疑点，向公诉人、辩护人或被告人发问，发问将被当庭作答；"
+                                     "也可以不发问，直接记录意见。")
+                    yield {"type": "checkpoint", "kind": "juror_question",
+                           "title": "陪审员发问", "next": "mid_review",
+                           "remaining": MAX_JUROR_QUESTIONS - len(self.questions)}
+                    return
+                yield judge_line("发问环节结束。请人民陪审员记录阶段性意见，"
+                                 "合议庭评议时将参考你的判断。")
                 yield {"type": "checkpoint", "kind": "mid_review",
-                       "title": "阶段性预判与发问", "next": "debate",
-                       "options": self.case["options"], "allow_question": True}
+                       "title": "阶段性预判", "next": "debate",
+                       "options": self.case["options"], "allow_question": False}
                 return
             elif name == "poll2":
                 if self.player_role == "audience":
@@ -287,7 +299,32 @@ class TrialEngine:
     # 检查点处理：记录陪审员预判；有发问则由被问方当庭作答
     # ------------------------------------------------------------------
     def apply_checkpoint(self, kind: str, data: dict):
-        if kind == "mid_review":
+        if kind == "juror_question":
+            # 发问独立成轮：问→当庭作答→可继续追问或结束发问进入预判
+            question = (data.get("question") or "").strip()
+            target = (data.get("target") or "").strip()
+            if not question:
+                yield judge_line("人民陪审员表示不再发问，庭审继续。")
+                return
+            if len(self.questions) >= MAX_JUROR_QUESTIONS:
+                raise ValueError("发问次数已达上限")
+            if target not in self.roles or target == "clerk":
+                raise ValueError("发问对象需为公诉人、辩护人或被告人")
+            role = self.roles[target]
+            self.questions.append({"target": target, "question": question[:200]})
+            yield judge_line(f"人民陪审员向{role['name']}发问：“{question}”请当庭作答。")
+            task = (f"人民陪审员在法庭调查结束后向你发问：“{question}”\n"
+                    f"请当庭正面作答：只说结论和一个理由，使用证据名称并保留内部编号，"
+                    f"不超过70字。")
+            yield from self.turn(target, task)
+            yield judge_line("陪审员的发问与回答已记录在案。")
+            remaining = MAX_JUROR_QUESTIONS - len(self.questions)
+            if remaining > 0:
+                yield judge_line(f"如仍有疑问，陪审员可继续发问（还可发问{remaining}次），"
+                                 "也可以直接记录阶段性意见。")
+                yield {"type": "checkpoint", "kind": "juror_question",
+                       "title": "陪审员发问", "next": "mid_review", "remaining": remaining}
+        elif kind == "mid_review":
             label = self._record_poll("investigation", data)
             yield judge_line(f"书记员记录：人民陪审员在法庭调查后的阶段意见为——{label}。")
             question = (data.get("question") or "").strip()

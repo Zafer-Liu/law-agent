@@ -2019,6 +2019,13 @@ def create_app() -> Flask:
             if not 10 <= len(statement) <= MAX_COURT_STATEMENT:
                 abort(400, "角色发言需在 10-500 字之间")
             payload = {"statement": statement, "stage": checkpoint.get("stage", "")}
+        elif kind == "juror_question":
+            # 发问独立成轮：不需要预判，仅提交问题与对象（可为空表示结束发问）
+            question = text_value(data, "question", limit=MAX_COURT_QUESTION)
+            target = text_value(data, "target", limit=32)
+            if question and target not in ("prosecutor", "defender", "defendant"):
+                abort(400, "发问对象需为公诉人、辩护人或被告人")
+            payload = {"question": question, "target": target}
         else:
             poll_id = text_value(data, "poll", limit=32)
             if not any(o["id"] == poll_id for o in case["options"]):
@@ -2037,6 +2044,12 @@ def create_app() -> Flask:
             yield sse({"type": "resume", "kind": kind})
             try:
                 for event in engine.apply_checkpoint(kind, payload):
+                    if event.get("type") == "checkpoint":
+                        # 发问轮可连续追问：apply_checkpoint 内部也可能产生新检查点
+                        save_court_session(session_id, row["case_id"], engine,
+                                           next_stage=event["next"], checkpoint=event)
+                        yield sse(event)
+                        return
                     yield sse(event)
                 for event in engine.run(from_stage=next_stage):
                     if event.get("type") == "checkpoint":

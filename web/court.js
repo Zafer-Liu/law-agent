@@ -622,6 +622,10 @@
       renderRoleCheckpoint(cp);
       return;
     }
+    if (cp.kind === "juror_question") {
+      renderQuestionCheckpoint(cp);
+      return;
+    }
     setSpeaking("juror", "人民陪审员（你）", "陪");
 
     const card = document.createElement("div");
@@ -634,7 +638,7 @@
     card.innerHTML = `
       <div class="cp-title">审判长征求你的意见</div>
       <p class="cp-quote">“${cp.kind === "mid_review"
-        ? "法庭调查结束。请陪审员记录阶段性意见，并可就卷宗证据向控辩双方发问。"
+        ? "法庭调查与你的发问已经结束。请陪审员记录阶段性意见。"
         : "听完控辩双方的对抗，你的判断是否发生了变化？请再次记录你的意见。"}”</p>
       ${cp.previous_label ? `<div class="cp-prev">你在法庭调查后的预判是：<b>${escapeHtml(cp.previous_label)}</b></div>` : ""}
       <div class="cp-label">你的阶段性预判 <small>（必选）</small></div>
@@ -668,6 +672,87 @@
       });
     });
     card.querySelector("#cp-submit").addEventListener("click", () => submitCheckpoint(cp, card, selected));
+  }
+
+  // 发问独立成轮：问→当庭作答→可继续追问，或结束发问进入阶段性预判
+  function renderQuestionCheckpoint(cp) {
+    setSpeaking("juror", "人民陪审员（你）", "陪");
+    const remaining = typeof cp.remaining === "number" ? cp.remaining : 3;
+    const card = document.createElement("div");
+    card.className = "cp-card";
+    card.innerHTML = `
+      <div class="cp-title">审判长征求你的发问</div>
+      <p class="cp-quote">“就卷宗证据与庭审疑点，你可以向公诉人、辩护人或被告人发问，他们会当庭作答。”</p>
+      <div class="cp-label">向当事人发问 <small>（可选，还会被当庭作答）</small></div>
+      <div class="cp-question">
+        <textarea id="cp-question" rows="2" maxlength="200"
+          placeholder="例：监控视频显示夺刀到追刺只有 11 秒，你凭什么认定侵害已经结束？"></textarea>
+        <div class="cp-target">
+          发给：
+          <label><input type="radio" name="cp-target" value="prosecutor" checked>公诉人</label>
+          <label><input type="radio" name="cp-target" value="defender">辩护人</label>
+          <label><input type="radio" name="cp-target" value="defendant">被告人</label>
+        </div>
+      </div>
+      ${remaining > 1 ? `<div class="cp-prev">发问后可以继续追问，也可以随时记录阶段性预判（还可发问 ${remaining} 次）。</div>` : ""}
+      <div class="cp-actions">
+        <button type="button" class="primary-btn" id="cp-ask" disabled>发问，当庭作答</button>
+        <button type="button" class="secondary-btn" id="cp-skip">不再发问，记录阶段性预判</button>
+      </div>
+    `;
+    checkpointPanel.innerHTML = "";
+    checkpointPanel.appendChild(card);
+    showSpeechAction();
+
+    const textarea = card.querySelector("#cp-question");
+    const ask = card.querySelector("#cp-ask");
+    const skip = card.querySelector("#cp-skip");
+    textarea.addEventListener("input", () => { ask.disabled = textarea.value.trim().length === 0; });
+    ask.addEventListener("click", () => {
+      const question = textarea.value.trim();
+      if (!question) { toast("请先写下你的问题"); return; }
+      const target = card.querySelector('input[name="cp-target"]:checked').value;
+      submitQuestionCheckpoint(cp, { question: question.slice(0, 200), target }, card);
+    });
+    skip.addEventListener("click", () => submitQuestionCheckpoint(cp, {}, card));
+  }
+
+  async function submitQuestionCheckpoint(cp, body, card) {
+    const [ask, skip] = [card.querySelector("#cp-ask"), card.querySelector("#cp-skip")];
+    ask.disabled = true;
+    skip.disabled = true;
+    ask.textContent = "正在提交…";
+    showSpeechText();
+    const controller = new AbortController();
+    trialAbortController = controller;
+    try {
+      const res = await fetch(`/api/court/sessions/${sessionId}/continue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || "提交失败");
+        if (res.status === 401) window.dispatchEvent(new CustomEvent("auth:request-login"));
+        showSpeechAction();
+        ask.disabled = false;
+        skip.disabled = false;
+        ask.textContent = "发问，当庭作答";
+        return;
+      }
+      await readSse(res, handleTrialEvent, { pausable: true });
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      toast("网络错误");
+      showSpeechAction();
+      ask.disabled = false;
+      skip.disabled = false;
+      ask.textContent = "发问，当庭作答";
+    } finally {
+      if (trialAbortController === controller) trialAbortController = null;
+    }
   }
 
   function renderRoleCheckpoint(cp) {
