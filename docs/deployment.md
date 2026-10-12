@@ -54,6 +54,7 @@ LAW_JEV_REL_MIN=2.0
 LAW_JEV_INJ_MAX=0.5
 LAW_JEV_EXCERPT_CHARS=600
 LAW_PKULAW_TOKEN=...                               # 北大法宝 MCP（不设即停用）
+LAW_WEBSEARCH_API_KEY=...                           # 联网搜索 MCP（不设即停用）
 PYTHONUNBUFFERED=1
 ```
 

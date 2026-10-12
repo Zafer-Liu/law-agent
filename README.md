@@ -39,6 +39,7 @@ python -m legalweb
 | `LAW_PKULAW_TOKEN` | （可选）北大法宝 MCP 检索 Token，配置后问答启用在线法条检索（条目附原文链接与时效性） |
 | `TYPESAFE_API_KEY` | （可选）TypeSafe API Key，配置后启用 Jev 检索质量门控 |
 | `LAW_JEV_GATE` | Jev 开关，默认 `1`；设为 `0` 可关闭 |
+| `LAW_WEBSEARCH_API_KEY` | （可选）智谱联网搜索 Key（GLM Coding Plan MCP 或普通智谱 Key），配置后问答输入区出现「联网搜索」开关，开启后自动搜索补充依据并附可跳转的原文链接 |
 
 未配置向量服务时自动降级为词法 + FTS5 检索，界面会明确标注。
 

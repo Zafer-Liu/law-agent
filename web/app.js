@@ -88,6 +88,49 @@
     try { return localStorage.getItem(PET_MEMORY_KEY) === "1"; } catch { return false; }
   }
 
+  // ---- 网页读取开关：默认关闭，浏览器偏好；服务端未配置 Key 时不可用 ----
+  const WEB_SEARCH_KEY = "faxiao_web_search_enabled";
+  const webSearchToggle = document.getElementById("web-search-toggle");
+  const qaInputEl = document.getElementById("qa-input");
+  const QA_PLACEHOLDER_DEFAULT = "输入你的法律问题…";
+  const QA_PLACEHOLDER_WEB = "输入你的法律问题… 可开启联网搜索获取最新信息";
+
+  function webSearchEnabled() {
+    return Boolean(webSearchToggle && webSearchToggle.getAttribute("aria-pressed") === "true");
+  }
+
+  function renderWebSearchToggle(on = webSearchEnabled()) {
+    if (!webSearchToggle) return;
+    webSearchToggle.setAttribute("aria-pressed", on ? "true" : "false");
+    if (qaInputEl && (qaInputEl.placeholder === QA_PLACEHOLDER_DEFAULT ||
+                      qaInputEl.placeholder === QA_PLACEHOLDER_WEB)) {
+      qaInputEl.placeholder = on ? QA_PLACEHOLDER_WEB : QA_PLACEHOLDER_DEFAULT;
+    }
+  }
+
+  if (webSearchToggle) {
+    webSearchToggle.addEventListener("click", () => {
+      const next = !webSearchEnabled();
+      try {
+        if (next) localStorage.setItem(WEB_SEARCH_KEY, "1");
+        else localStorage.removeItem(WEB_SEARCH_KEY);
+      } catch { /* 隐私模式下忽略持久化失败 */ }
+      renderWebSearchToggle(next);
+    });
+    // 服务端配置了 Key 才放开按钮，并恢复浏览器上次的开启状态
+    fetch(API_BASE + "/api/config")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((cfg) => {
+        if (!cfg || !cfg.web_search_configured) return;
+        let saved = false;
+        try { saved = localStorage.getItem(WEB_SEARCH_KEY) === "1"; } catch { /* 忽略 */ }
+        webSearchToggle.disabled = false;
+        webSearchToggle.title = "开启后，自动联网搜索作为补充依据";
+        if (saved) { webSearchToggle.setAttribute("aria-pressed", "true"); renderWebSearchToggle(); }
+      })
+      .catch(() => { /* 配置查询失败保持禁用 */ });
+  }
+
   // ---- 产品事件埋点：批量、静默、不阻塞业务（需登录，未登录直接丢弃） ----
   const EVENT_ENDPOINT = API_BASE + "/api/events";
   const eventQueue = [];
@@ -484,6 +527,7 @@
           client_id: clientId,
           request_id: requestId,
           remember: petMemoryEnabled(),
+          web_search: webSearchEnabled(),
         }),
       });
 

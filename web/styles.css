@@ -1876,3 +1876,16 @@ body {
 }
 .send-btn:hover:not(:disabled) { background: var(--ink); transform: translate(-1px, -1px); box-shadow: 5px 5px 0 rgba(17,17,17,.85); }
 .send-btn:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 1px 1px 0 rgba(17,17,17,.85); }
+
+/* ---- 网页读取开关（composer 底部）：报纸栏目按钮语言 ---- */
+.web-reader-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 34px; padding: 5px 12px;
+  border: 1px solid var(--ink); background: var(--surface); color: var(--text);
+  font-size: 12px; font-weight: 600; letter-spacing: .06em; cursor: pointer;
+  transition: background .12s, color .12s, opacity .15s;
+}
+.web-reader-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.web-reader-toggle:hover:not(:disabled) { background: var(--bg); }
+.web-reader-toggle[aria-pressed="true"] { background: var(--ink); color: #F9F9F7; }
+.web-reader-toggle:disabled { opacity: .38; cursor: not-allowed; }

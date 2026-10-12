@@ -39,6 +39,7 @@ from .documents import FORMATS, parse_document, split_sections
 from .jev_gate import configured as jev_configured
 from .llm import LLMClient, LLMError
 from .pkulaw import PkulawClient
+from .websearch import WebSearchClient, WebSearchError
 from . import compaction
 from . import rag
 from .rag import EmbeddingClient, retrieve, terms, tokenize
@@ -411,6 +412,9 @@ def create_app() -> Flask:
     qa_llm = LLMClient("LAW_LLM")
     court_llm = LLMClient("LAW_COURT_LLM")
     pkulaw = PkulawClient()
+    websearch = WebSearchClient()
+    if not websearch.configured:
+        LOG.info("联网搜索未配置：设置 LAW_WEBSEARCH_API_KEY 后自动启用")
     if not pkulaw.configured:
         LOG.info("北大法宝在线检索未配置：设置 LAW_PKULAW_TOKEN 后自动启用")
     legal_logger = logging.getLogger("legalweb")
@@ -462,6 +466,7 @@ def create_app() -> Flask:
                         "court_llm_configured": court_llm.configured,
                         "embed_configured": embedder.configured,
                         "jev_configured": jev_configured(),
+                        "web_search_configured": websearch.configured,
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
 
     @app.get("/api/basics")
@@ -1632,6 +1637,7 @@ def create_app() -> Flask:
         request_id = request_identity(data)
         identity = user_identity(require_user())
         remember_pet = data.get("remember") is True
+        use_web_search = data.get("web_search") is True
         if not 2 <= len(question) <= MAX_QUESTION:
             abort(400, "问题长度需在 2-2000 字之间")
         if not qa_llm.configured:
@@ -1693,6 +1699,25 @@ def create_app() -> Flask:
                 LOG.info("追问兜底检索命中 %d 段（并入历史对话）", len(retrieval["hits"]))
             online_hits = (pkulaw.search(question)
                            if features["pkulaw"] and pkulaw.configured else [])
+            # 联网搜索：开启且已配置时搜索整句问题，结果作为带链接的在线证据
+            web_hits = []
+            if use_web_search and websearch.configured:
+                yield sse({"type": "status", "text": "正在联网搜索…"})
+                try:
+                    for row in websearch.search(question, count=4):
+                        web_hits.append({
+                            "id": f"web:{row['url'] or row['snippet'][:48]}",
+                            "source_title": f"联网搜索 · {row['site'] or '网络'}",
+                            "section": row["title"] or "搜索摘要",
+                            "ordinal": 0,
+                            "text": "\n".join(part for part in (row["title"], row["snippet"]) if part),
+                            "url": row["url"],
+                            "timeliness": "",
+                        })
+                except WebSearchError as exc:
+                    LOG.warning("联网搜索失败，已跳过：%s", exc)
+                    yield sse({"type": "status", "text": "联网搜索失败，已跳过"})
+            online_hits = [*online_hits, *web_hits]
             backend = retrieval["backend"] + ("+pkulaw" if online_hits else "")
             LOG.info("问答检索 · 本地 %d 段 · 在线 %d 段 · backend=%s",
                      len(retrieval["hits"]), len(online_hits), backend)
@@ -1720,6 +1745,9 @@ def create_app() -> Flask:
             if not retrieval["hits"] and not online_hits:
                 notice = ("本次未检索到可直接引用的条文，回答基于一般法律知识生成，"
                           "请以官方发布文本为准；不构成法律意见。")
+            elif web_hits:
+                notice = ("回答参考本地知识库与联网搜索结果（搜索条目附原文链接，"
+                          "网络内容未经核实，请自行甄别）；均以官方发布文本为准；不构成法律意见。")
             elif online_hits:
                 notice = ("回答参考本地知识库与北大法宝在线检索（在线条目附原文链接）；"
                           "均以官方发布文本为准；不构成法律意见。")
