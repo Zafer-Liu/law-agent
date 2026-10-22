@@ -38,6 +38,13 @@ from . import qa
 from .courtroom import cases as court_cases
 from .courtroom import scoring as court_scoring
 from .courtroom.engine import PLAYER_ROLES, TrialEngine
+
+# LangGraph 庭审引擎（可选）：缺依赖时自动回退 legacy 引擎
+try:
+    from .courtroom.graph_engine import GraphTrialEngine
+    LANGGRAPH_AVAILABLE = True
+except ImportError:
+    LANGGRAPH_AVAILABLE = False
 from .database import Database, new_id, now_iso, public_message
 from .documents import FORMATS, parse_document, split_sections
 from .jev_gate import configured as jev_configured
@@ -1893,6 +1900,13 @@ def create_app() -> Flask:
     # ------------------------------------------------------------------
     # 模拟法庭
     # ------------------------------------------------------------------
+    def court_engine_mode() -> str:
+        """LAW_COURT_ENGINE=legacy 强制旧引擎；默认 langgraph（可用时）。"""
+        flag = (os.getenv("LAW_COURT_ENGINE") or "").strip().lower()
+        if flag in ("legacy", "0", "false"):
+            return "legacy"
+        return "langgraph" if LANGGRAPH_AVAILABLE else "legacy"
+
     def save_court_session(session_id: str, case_id: str, engine: TrialEngine,
                            *, next_stage: str = "", checkpoint: dict | None = None,
                            owner: str = ""):
@@ -1972,13 +1986,17 @@ def create_app() -> Flask:
             abort(400, "请选择有效的庭审角色")
         identity = user_identity(require_user())
         session_id = new_id()
-        engine = TrialEngine(case, court_llm, player_role=player_role)
+        use_langgraph = court_engine_mode() == "langgraph"
+        if use_langgraph:
+            engine = GraphTrialEngine(case, court_llm, player_role=player_role)
+        else:
+            engine = TrialEngine(case, court_llm, player_role=player_role)
 
         def stream():
             yield sse({"type": "session", "session_id": session_id, "case_id": case_id,
                        "player_role": player_role})
             try:
-                for event in engine.run():
+                for event in (engine.start() if use_langgraph else engine.run()):
                     # 检查点：暂停庭审，等待用户通过 /continue 提交预判或角色发言。
                     if event.get("type") == "checkpoint":
                         save_court_session(session_id, case_id, engine,
@@ -2037,6 +2055,34 @@ def create_app() -> Flask:
             payload = {"poll": poll_id, "question": question, "target": target}
         if not court_llm.configured:
             abort(503, "模拟法庭服务暂不可用，请稍后再试")
+
+        if state.get("engine") == "langgraph":
+            # LangGraph 会话：图检查点库是唯一事实来源，按 thread_id 续跑。
+            # LLMError 时 superstep 不提交（图自动回滚），只报错、不落库。
+            engine = GraphTrialEngine(case, court_llm,
+                                      player_role=state.get("player_role") or "juror",
+                                      thread_id=state.get("thread_id") or "")
+
+            def graph_stream():
+                yield sse({"type": "resume", "kind": kind})
+                try:
+                    for event in engine.continue_(payload):
+                        if event.get("type") == "checkpoint":
+                            save_court_session(session_id, row["case_id"], engine,
+                                               next_stage=event["next"], checkpoint=event)
+                            yield sse(event)
+                            return
+                        yield sse(event)
+                except LLMError as exc:
+                    # 图状态已回滚到上一提交点：用户重新提交即可完整重放
+                    yield sse({"type": "error", "error": str(exc)})
+                    return
+                save_court_session(session_id, row["case_id"], engine,
+                                   next_stage="await_deliberation")
+
+            return Response(stream_with_context(graph_stream()),
+                            mimetype="text/event-stream")
+
         engine = restore_engine(row)
         next_stage = state["next_stage"]
 
