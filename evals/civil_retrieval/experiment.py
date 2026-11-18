@@ -14,8 +14,6 @@ import sys
 import unicodedata
 from uuid import UUID
 
-import psycopg2
-from psycopg2.extras import execute_values
 import requests
 
 
@@ -24,6 +22,8 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from legalweb.case_vectors import (DIMENSION, LOCAL_MODEL, MODEL, TEXT_VERSION,
                                   cloud_settings, embed, local_encoder, ranked_cases)
+import psycopg2
+from psycopg2.extras import execute_values
 
 ISSUE_FILE = Path(__file__).with_name("query_issues.json")
 FACT_START = re.compile(r"(?:向本院提出诉讼请求|(?:原告|上诉人)(?:起诉|诉称|称)|(?:本院|一审法院|原审法院)(?:经审理)?(?:查明|认定)(?:事实)?|经审理查明)[:：]?")

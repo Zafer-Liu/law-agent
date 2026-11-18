@@ -1735,7 +1735,7 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
 .auth-field input:focus-visible { outline: none; }
 
 /* Keep the main destinations and account controls visible on narrow screens. */
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   :root { --topbar-height: 112px; }
   .topbar {
     height: var(--topbar-height); min-height: var(--topbar-height);

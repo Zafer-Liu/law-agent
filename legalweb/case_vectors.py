@@ -12,6 +12,9 @@ from typing import NamedTuple
 import unicodedata
 from urllib.parse import urlsplit
 
+# Initialize Python’s libz before loading the PostgreSQL wheel on Railway.
+import zlib  # noqa: F401
+
 import requests
 
 
