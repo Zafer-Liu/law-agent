@@ -171,6 +171,32 @@
   // ---- 网页读取开关：默认关闭，浏览器偏好；服务端未配置 Key 时不可用 ----
   const WEB_SEARCH_KEY = "faxiao_web_search_enabled";
   const webSearchToggle = document.getElementById("web-search-toggle");
+  const caseSearchToggle = document.getElementById("case-search-toggle");
+  let caseSearchConfigured = false;
+  let canUseCaseSearch = false;
+
+  function syncCaseSearchToggle() {
+    if (!caseSearchToggle) return;
+    caseSearchToggle.disabled = !caseSearchConfigured || !canUseCaseSearch;
+    if (caseSearchToggle.disabled) caseSearchToggle.setAttribute("aria-pressed", "false");
+    caseSearchToggle.title = !canUseCaseSearch ? "课程案例库仅供管理员检索"
+      : caseSearchConfigured ? "开启后检索课程案例。使用百炼模型时，问题会发送至百炼。"
+      : "课程案例库尚未配置";
+  }
+
+  function caseSearchEnabled() {
+    return Boolean(caseSearchToggle && !caseSearchToggle.disabled
+      && caseSearchToggle.getAttribute("aria-pressed") === "true");
+  }
+
+  caseSearchToggle?.addEventListener("click", () => {
+    caseSearchToggle.setAttribute("aria-pressed", String(!caseSearchEnabled()));
+  });
+  window.addEventListener("auth:changed", (event) => {
+    canUseCaseSearch = Boolean(event.detail?.user?.is_admin);
+    caseSearchToggle?.setAttribute("aria-pressed", "false");
+    syncCaseSearchToggle();
+  });
   const qaInputEl = document.getElementById("qa-input");
   const QA_PLACEHOLDER_DEFAULT = "输入你的法律问题…";
   const QA_PLACEHOLDER_WEB = "输入你的法律问题… 可开启联网搜索获取最新信息";
@@ -201,7 +227,9 @@
     fetch(API_BASE + "/api/config")
       .then((res) => (res.ok ? res.json() : null))
       .then((cfg) => {
-        if (!cfg || !cfg.web_search_configured) return;
+        caseSearchConfigured = Boolean(cfg?.case_search_configured);
+        syncCaseSearchToggle();
+        if (!cfg?.web_search_configured) return;
         let saved = false;
         try { saved = localStorage.getItem(WEB_SEARCH_KEY) === "1"; } catch { /* 忽略 */ }
         webSearchToggle.disabled = false;
@@ -676,7 +704,7 @@
           client_id: clientId,
           request_id: requestId,
           remember: petMemoryEnabled(),
-          web_search: webSearchEnabled(),
+          web_search: webSearchEnabled(), case_search: caseSearchEnabled(),
           mode: qaMode(),
         }),
       });
@@ -1551,11 +1579,12 @@
         <div class="citation-meta">
           <span class="label">${escapeHtml(c.label)}</span>
           ${article ? `<strong class="article">${escapeHtml(article)}</strong>` : ""}
+          ${c.source_kind === "case" ? '<span class="citation-badge">参考案例</span>' : ""}
           ${c.url ? '<span class="citation-badge">在线</span>' : ""}
         </div>
         <p class="citation-source">${escapeHtml(source)}</p>
       `;
-      const validity = renderValidity(c.validity);
+      const validity = c.source_kind === "case" ? null : renderValidity(c.validity);
       if (validity) item.appendChild(validity);
       const excerpt = document.createElement("p");
       excerpt.className = "excerpt";

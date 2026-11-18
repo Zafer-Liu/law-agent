@@ -3,6 +3,7 @@
 import json
 import re
 
+from .case_vectors import CASE_EVIDENCE_GUIDANCE
 from .personas import persona_prompt
 from .rag import lexical_score
 
@@ -131,7 +132,8 @@ def build_messages(question, evidence: Evidence, previous_questions, recent_answ
     context = {
         "question": question,
         "evidence": [{"label": ref["label"], "section": ref["section"],
-                      "excerpt": ref["excerpt"]} for ref in evidence.refs],
+                      "excerpt": ref["excerpt"],
+                      "source_kind": ref.get("source_kind", "reference")} for ref in evidence.refs],
     }
     # 历史用于消解指代（"上面说的""它"）与延续话题，不作为新证据。
     if conversation_summary:
@@ -140,7 +142,10 @@ def build_messages(question, evidence: Evidence, previous_questions, recent_answ
         context["previous_questions_for_resolving_pronouns_only"] = [q[:800] for q in previous_questions[-12:]]
     if recent_answers:
         context["recent_answer_summaries_for_continuity_only"] = [a[:1500] for a in recent_answers[-6:]]
-    return [{"role": "system", "content": persona_prompt(mode)},
+    instructions = persona_prompt(mode)
+    if any(ref.get("source_kind") == "case" for ref in evidence.refs):
+        instructions += "\n\n" + CASE_EVIDENCE_GUIDANCE
+    return [{"role": "system", "content": instructions},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
 
 

@@ -1734,7 +1734,7 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
 .matter-field input:focus-visible, .matter-field textarea:focus-visible,
 .auth-field input:focus-visible { outline: none; }
 
-/* Keep the five destinations and account controls visible on narrow screens. */
+/* Keep the main destinations and account controls visible on narrow screens. */
 @media (max-width: 640px) {
   :root { --topbar-height: 112px; }
   .topbar {
@@ -1745,7 +1745,7 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
   .auth-area { margin-left: auto; }
   .tabs {
     order: 3; flex: 0 0 100%; width: 100%; margin: 0; padding: 3px;
-    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px;
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px;
   }
   .tab { width: 100%; min-height: 38px; padding: 6px 2px; font-size: 12px; }
   .settings-button { width: 40px; height: 40px; }

@@ -8,6 +8,7 @@
   <link rel="icon" type="image/png" sizes="256x256" href="assets/logo.png">
   <link rel="stylesheet" href="assets/styles.css">
   <link rel="stylesheet" href="assets/pet.css">
+  <link rel="stylesheet" href="assets/case-search.css">
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +28,8 @@
         aria-selected="true" aria-controls="tab-qa">法律问答</button>
       <button id="tab-button-matter" class="tab" data-tab="matter" role="tab"
         aria-selected="false" aria-controls="tab-matter">问题工作台</button>
+      <button id="tab-button-cases" class="tab" data-tab="cases" role="tab"
+        aria-selected="false" aria-controls="tab-cases">类案检索</button>
       <button id="tab-button-court" class="tab" data-tab="court" role="tab"
         aria-selected="false" aria-controls="tab-court">模拟法庭</button>
       <button id="tab-button-basics" class="tab" data-tab="basics" role="tab"
@@ -141,6 +144,8 @@
                 </svg>
                 联网搜索
               </button>
+              <button type="button" id="case-search-toggle" class="web-reader-toggle"
+                aria-pressed="false" title="课程案例库仅供管理员检索" disabled>检索案例库</button>
               <button type="submit" id="qa-send" class="send-btn" disabled>发送问题</button>
             </div>
           </form>
@@ -481,6 +486,27 @@
     </div>
   </main>
 
+  <main id="tab-cases" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-cases">
+    <div class="case-docket">
+      <header class="case-docket-head">
+        <h2>民事类案检索</h2>
+        <p>按案情和争点查找课程案例。打开候选文书，对照事实、证据和裁判理由。</p>
+      </header>
+      <form id="case-search-form" class="case-form">
+        <label for="case-query">案情或关键争点</label>
+        <textarea id="case-query" rows="5" maxlength="3000" required
+          placeholder="写明法律关系、争议事实和关键证据，例如买方是否已付清货款。"></textarea>
+        <p id="case-cloud-notice" class="muted" hidden>检索会将输入发送至阿里云百炼，请先去掉真实当事人的身份和联系方式。</p>
+        <div class="case-actions">
+          <button id="case-example" type="button" class="outline-btn">填入示例</button>
+          <button id="case-search-submit" type="submit" class="primary-btn" disabled>检索案例</button>
+        </div>
+      </form>
+      <p id="case-status" class="case-status" role="status"></p>
+      <ol id="case-results" class="case-results" aria-label="案例检索结果"></ol>
+    </div>
+  </main>
+
   <!-- ==================== 法律常识 Tab ==================== -->
   <main id="tab-basics" class="tab-panel basics-panel" role="tabpanel" aria-labelledby="tab-button-basics">
     <div class="learn-wrap basics-wrap">
@@ -687,5 +713,6 @@
   <script src="assets/basics.js"></script>
   <script src="assets/pet.js"></script>
   <script src="assets/court.js"></script>
+  <script src="assets/case-search.js"></script>
 </body>
 </html>

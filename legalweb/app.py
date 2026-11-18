@@ -33,6 +33,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import basics as basics_module
+from .case_vectors import CaseSearch, CaseSearchError, MODEL as CASE_CLOUD_MODEL, case_reference_hits
 from . import matter as matter_module
 from . import qa
 from .courtroom import cases as court_cases
@@ -456,6 +457,7 @@ def create_app() -> Flask:
     uploads_dir = data_root / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     embedder = EmbeddingClient()
+    case_search = CaseSearch()
     qa_llm = LLMClient("LAW_LLM")
     court_llm = LLMClient("LAW_COURT_LLM")
     pkulaw = PkulawClient()
@@ -516,6 +518,7 @@ def create_app() -> Flask:
                         "embed_configured": embedder.configured,
                         "jev_configured": jev_configured(),
                         "web_search_configured": websearch.configured,
+                        "case_search_configured": case_search.configured,
                         "retrieval_backend": "vector+lexical+fts5" if embedder.configured else "lexical+fts5"})
 
     @app.get("/api/basics")
@@ -669,6 +672,37 @@ def create_app() -> Flask:
                 db.execute("DELETE FROM auth_sessions WHERE token=?", (token,))
         response = jsonify({"ok": True})
         response.delete_cookie(AUTH_COOKIE, path="/")
+        return response
+
+    @app.get("/api/cases/config")
+    def cases_config():
+        require_admin()
+        return jsonify({"configured": case_search.configured, "model": case_search.model,
+                        "cloud": case_search.model == CASE_CLOUD_MODEL})
+
+    @app.post("/api/cases/search")
+    def cases_search():
+        require_admin()
+        if not request.is_json:
+            return jsonify(error="请以 JSON 提交案情"), 415
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="JSON 请求必须是对象"), 400
+        query = text_value(payload, "query", limit=3000)
+        if not query:
+            return jsonify(error="请输入案情或关键争点"), 400
+        limit = payload.get("limit", 5)
+        if type(limit) is not int or not 1 <= limit <= 10:
+            return jsonify(error="结果数量须为 1 至 10"), 400
+        try:
+            matches = case_search.search(query, limit)
+        except CaseSearchError as exc:
+            return jsonify(error=str(exc)), 503
+        except Exception as exc:
+            LOG.warning("民事类案检索失败 · %s", type(exc).__name__)
+            return jsonify(error="案例库或向量服务暂不可用，请检查连接配置后重试"), 503
+        response = jsonify(model=case_search.model, matches=matches)
+        response.cache_control.no_store = True
         return response
 
     @app.get("/api/auth/me")
@@ -1745,7 +1779,11 @@ def create_app() -> Flask:
         question = text_value(data, "question", limit=MAX_QUESTION)
         conversation_id = text_value(data, "conversation_id", limit=128)
         request_id = request_identity(data)
-        identity = user_identity(require_user())
+        user = require_user()
+        identity = user_identity(user)
+        use_case_search = data.get("case_search") is True
+        if use_case_search and not user["is_admin"]:
+            abort(403, "课程案例库仅供管理员检索")
         remember_pet = data.get("remember") is True
         use_web_search = data.get("web_search") is True
         qa_mode = text_value(data, "mode", limit=32) or "ordinary"
@@ -1831,12 +1869,27 @@ def create_app() -> Flask:
                     LOG.warning("联网搜索失败，已跳过：%s", exc)
                     yield sse({"type": "status", "text": "联网搜索失败，已跳过"})
             online_hits = [*online_hits, *web_hits]
+            case_hits = []
+            case_status = ""
+            if use_case_search:
+                yield sse({"type": "status", "text": "正在检索课程案例…"})
+                try:
+                    case_hits = case_reference_hits(case_search, question)
+                    case_status = "已检索课程案例" if case_hits else "课程案例库未返回候选"
+                except CaseSearchError as exc:
+                    case_status = str(exc)
+                except Exception as exc:
+                    LOG.warning("问答案例检索失败 · %s", type(exc).__name__)
+                    case_status = "课程案例库暂不可用"
+                yield sse({"type": "status", "text": case_status})
             backend = retrieval["backend"] + ("+pkulaw" if online_hits else "")
+            if case_hits:
+                backend += "+cases"
             LOG.info("问答检索 · 本地 %d 段 · 在线 %d 段 · backend=%s",
                      len(retrieval["hits"]), len(online_hits), backend)
             # 检索 0 命中不再拒答：面向普通用户仍生成完整回答
             # （系统提示会要求标注"基于一般法律知识、无条文依据"），grounded=False。
-            evidence = qa.Evidence([*retrieval["hits"], *online_hits], question)
+            evidence = qa.Evidence([*retrieval["hits"], *online_hits, *case_hits], question)
             messages = qa.build_messages(question, evidence, previous, recent_answers,
                                          conversation_summary=summary, mode=qa_mode)
             yield sse({"type": "status", "text": "正在生成回答…", "backend": backend})
@@ -1870,6 +1923,8 @@ def create_app() -> Flask:
                 notice = f"已移除 {result['removed']} 处无效引用。" + notice
             elif not result["used"]:
                 notice = "本次回答未携带引用标注，请注意核对原文。" + notice
+            if case_status:
+                notice += f" {case_status}。裁判文书用于类案比较，法律适用须另行核对。"
             with database.connect() as db:
                 user_message_id, assistant_message_id = new_id(), new_id()
                 db.execute("INSERT INTO messages (id,conversation_id,role,content,payload,created_at)"
