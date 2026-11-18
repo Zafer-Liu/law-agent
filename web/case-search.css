@@ -17,11 +17,13 @@
 .case-hit details h4 { margin-top: 10px; }
 .case-hit details p { margin-block: 4px 12px; line-height: 1.7; }
 .tabs .tab { white-space: nowrap; }
-@media (min-width: 761px) {
+@media (min-width: 961px) {
   .tabs { flex: 0 0 auto; }
+}
+@media (max-width: 960px) {
+  .tabs .tab { padding-inline: 1px; font-size: clamp(10px, 3.1vw, 12px); letter-spacing: 0; }
 }
 @media (max-width: 760px) {
   .case-hit { padding-inline-start: 35px; }
-  .tabs .tab { padding-inline: 1px; font-size: clamp(10px, 3.1vw, 12px); letter-spacing: 0; }
   .composer-bottom { flex-wrap: wrap; }
 }

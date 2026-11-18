@@ -1735,7 +1735,7 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
 .auth-field input:focus-visible { outline: none; }
 
 /* Keep the main destinations and account controls visible on narrow screens. */
-@media (max-width: 760px) {
+@media (max-width: 960px) {
   :root { --topbar-height: 112px; }
   .topbar {
     height: var(--topbar-height); min-height: var(--topbar-height);
@@ -1749,6 +1749,9 @@ button.auth-chip.auth-chip-btn:hover { background: #efe8e2; border-color: #d6ccc
   }
   .tab { width: 100%; min-height: 38px; padding: 6px 2px; font-size: 12px; }
   .settings-button { width: 40px; height: 40px; }
+  .topbar .edition-line { display: none; }
+}
+@media (max-width: 640px) {
   .question-groups { gap: 10px; }
   .question-group { padding: 14px 16px 8px; }
   .question-group:hover, .question-group:focus-within { transform: none; }
