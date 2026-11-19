@@ -60,6 +60,32 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(BadRequest):
                 text_value({"question": ["not text"]}, "question")
 
+    def test_stream_can_use_the_configured_provider_budget(self):
+        client = LLMClient()
+        client.providers = [{"base": "http://127.0.0.1:8000/v1", "model": "test", "key": "",
+                             "env": "LAW_LLM", "max_tokens": 16000}]
+        with patch("legalweb.llm.requests.post", return_value=FakeResponse([
+            sse_chunk("完整回答"), b"data: [DONE]",
+        ])) as post:
+            self.assertEqual(list(client.stream([], max_tokens=None))[-1], ("content", "完整回答"))
+        self.assertEqual(post.call_args.kwargs["json"]["max_tokens"], 16000)
+
+    def test_minimax_m3_can_answer_without_spending_the_budget_on_thinking(self):
+        client = LLMClient()
+        client.providers = [{"base": "https://api.minimax.cn/v1", "model": "MiniMax-M3", "key": "",
+                             "env": "LAW_LLM", "max_tokens": 16000}]
+        with patch("legalweb.llm.requests.post", return_value=FakeResponse([
+            sse_chunk("完整回答"), b"data: [DONE]",
+        ])) as post:
+            self.assertEqual(list(client.stream([], max_tokens=None, thinking=False))[-1], ("content", "完整回答"))
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertTrue(payload["reasoning_split"])
+        self.assertEqual(payload["max_tokens"], 16000)
+        for base, model in [("https://api.minimax.io/v1", "MiniMax-M3.1-Flash"),
+                            ("https://other.example/v1", "MiniMax-M3")]:
+            self.assertEqual(client._thinking_options({"base": base, "model": model}, False), {})
+
     def test_stream_keeps_non_think_tags_visible(self):
         client = LLMClient()
         provider = {"base": "http://127.0.0.1:8000/v1", "model": "test", "key": ""}

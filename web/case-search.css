@@ -1,13 +1,9 @@
-.case-docket { max-width: 820px; margin-inline: auto; }
-.case-docket-head { border-block-start: 4px solid var(--ink); padding: 16px 0 22px; }
-.case-docket-head h2 { font-family: 'Noto Serif SC', 'Songti SC', SimSun, serif; font-size: clamp(26px, 5vw, 44px); }
-.case-docket-head p, .case-status { margin-top: 8px; color: var(--text-muted); line-height: 1.55; }
-.case-form { display: grid; gap: 12px; padding: clamp(14px, 3vw, 25px); border: 1px solid var(--ink); background: var(--surface); }
+.case-form { display: grid; gap: 12px; margin-top: 22px; padding: clamp(14px, 3vw, 25px); border: 1px solid var(--ink); background: var(--surface); }
 .case-form label { font-weight: 600; }
 .case-form textarea { display: block; width: 100%; min-height: 112px; padding: 11px 12px; border: 1px solid #8a8a81; resize: vertical; line-height: 1.6; }
 .case-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
 .case-actions button { min-height: 44px; padding: 7px 16px; }
-.case-status { min-height: 1.55em; margin: 18px 0; }
+.case-status { min-height: 1.55em; margin: 18px 0; color: var(--text-muted); line-height: 1.55; }
 .case-results { list-style: none; counter-reset: case-rank; }
 .case-hit { position: relative; padding: 16px 0 16px 48px; border-block-start: 1px solid var(--ink); overflow-wrap: anywhere; }
 .case-hit::before { counter-increment: case-rank; content: counter(case-rank, decimal-leading-zero); position: absolute; top: 16px; left: 0; color: var(--primary-dark); font: 700 18px ui-monospace, monospace; }

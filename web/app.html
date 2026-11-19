@@ -145,7 +145,7 @@
                 联网搜索
               </button>
               <button type="button" id="case-search-toggle" class="web-reader-toggle"
-                aria-pressed="false" title="课程案例库仅供管理员检索" disabled>检索案例库</button>
+                aria-pressed="false" title="登录后可以检索案例库" disabled>检索案例库</button>
               <button type="submit" id="qa-send" class="send-btn" disabled>发送问题</button>
             </div>
           </form>
@@ -487,10 +487,11 @@
   </main>
 
   <main id="tab-cases" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-cases">
-    <div class="case-docket">
-      <header class="case-docket-head">
+    <div class="learn-wrap">
+      <header class="matter-head">
+        <span class="section-kicker">课程案例库</span>
         <h2>民事类案检索</h2>
-        <p>按案情和争点查找课程案例。打开候选文书，对照事实、证据和裁判理由。</p>
+        <p class="muted">按案情和争点查找课程案例。打开候选文书，对照事实、证据和裁判理由。</p>
       </header>
       <form id="case-search-form" class="case-form">
         <label for="case-query">案情或关键争点</label>

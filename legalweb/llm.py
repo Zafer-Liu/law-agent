@@ -7,6 +7,7 @@
 import json
 import logging
 import os
+from urllib.parse import urlsplit
 import re
 
 import requests
@@ -77,18 +78,28 @@ class LLMClient:
                 LOG.warning("LLM %s complete failed: %s: %s", provider["env"], type(exc).__name__, exc)
         raise LLMError("智能服务暂时繁忙，请稍后再试。") from failure
 
-    def stream(self, messages, temperature=0.2, max_tokens=2000):
+    @staticmethod
+    def _thinking_options(provider, thinking):
+        # M3 supports direct answers; M3.1-Flash rejects thinking=disabled.
+        if (thinking is None or provider["model"].lower() != "minimax-m3"
+                or urlsplit(provider["base"]).hostname not in {"api.minimax.cn", "api.minimax.io"}):
+            return {}
+        return {"thinking": {"type": "adaptive" if thinking else "disabled"}, "reasoning_split": True}
+
+    def stream(self, messages, temperature=0.2, max_tokens: int | None = 2000, *, thinking=None):
         """流式调用：先产出 ("delta", text) 增量，结束产出 ("content", 全文)。
 
         首个 delta 之前失败可切换备用模型；之后失败直接抛 LLMError。
+        max_tokens=None 使用当前模型配置的完整输出预算。
         """
         if not self.providers:
             raise LLMError("智能服务暂不可用，请稍后再试。")
         for index, provider in enumerate(self.providers):
             emitted = [False]
+            budget = provider["max_tokens"] if max_tokens is None else min(max_tokens, provider["max_tokens"])
             try:
                 content = yield from self._stream_once(provider, messages, temperature,
-                                                       min(max_tokens, provider["max_tokens"]), emitted)
+                                                       budget, emitted, thinking=thinking)
                 yield ("content", content)
                 return
             except LLMError as exc:
@@ -97,7 +108,7 @@ class LLMClient:
                 LOG.warning("LLM %s stream failed (%s); switching to fallback %s",
                             provider["env"], exc, self.providers[index + 1]["env"])
 
-    def _stream_once(self, provider, messages, temperature, max_tokens, emitted) -> str:
+    def _stream_once(self, provider, messages, temperature, max_tokens, emitted, *, thinking=None) -> str:
         content = ""
         # 推理模型（如 MiniMax-M3）会在 content 里输出 <think>...</think>。
         # 策略：先缓冲，直到检测到 </think> 或确认没有 <think> 才开始流式输出。
@@ -109,6 +120,7 @@ class LLMClient:
         try:
             payload = {"model": provider["model"], "messages": messages,
                        "temperature": temperature, "max_tokens": max_tokens, "stream": True}
+            payload.update(self._thinking_options(provider, thinking))
             with requests.post(api_url(provider["base"], "chat/completions"), json=payload,
                                headers=self._headers(provider), timeout=(5, 240),
                                allow_redirects=False, stream=True) as response:

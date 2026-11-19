@@ -676,13 +676,13 @@ def create_app() -> Flask:
 
     @app.get("/api/cases/config")
     def cases_config():
-        require_admin()
+        require_user()
         return jsonify({"configured": case_search.configured, "model": case_search.model,
                         "cloud": case_search.model == CASE_CLOUD_MODEL})
 
     @app.post("/api/cases/search")
     def cases_search():
-        require_admin()
+        require_user()
         if not request.is_json:
             return jsonify(error="请以 JSON 提交案情"), 415
         payload = request.get_json(silent=True)
@@ -1779,11 +1779,8 @@ def create_app() -> Flask:
         question = text_value(data, "question", limit=MAX_QUESTION)
         conversation_id = text_value(data, "conversation_id", limit=128)
         request_id = request_identity(data)
-        user = require_user()
-        identity = user_identity(user)
+        identity = user_identity(require_user())
         use_case_search = data.get("case_search") is True
-        if use_case_search and not user["is_admin"]:
-            abort(403, "课程案例库仅供管理员检索")
         remember_pet = data.get("remember") is True
         use_web_search = data.get("web_search") is True
         qa_mode = text_value(data, "mode", limit=32) or "ordinary"
@@ -1895,7 +1892,7 @@ def create_app() -> Flask:
             yield sse({"type": "status", "text": "正在生成回答…", "backend": backend})
             buffer = []
             try:
-                for kind, piece in qa_llm.stream(messages, temperature=0.15, max_tokens=3000):
+                for kind, piece in qa_llm.stream(messages, temperature=0.15, max_tokens=None, thinking=False):
                     if kind == "delta":
                         buffer.append(piece)
                         yield sse({"type": "delta", "text": piece})
@@ -1903,6 +1900,9 @@ def create_app() -> Flask:
                 yield sse({"type": "error", "error": str(exc)})
                 return
             result = qa.sanitize_citations("".join(buffer), evidence.valid_labels)
+            if not result["content"]:
+                yield sse({"type": "error", "error": "模型输出无有效正文，请重试。"})
+                return
             citations = [ref for ref in evidence.refs if ref["label"] in set(result["used"])]
             for ref in citations:
                 ref["validity"] = build_validity(

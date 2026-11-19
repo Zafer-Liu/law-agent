@@ -179,7 +179,7 @@
     if (!caseSearchToggle) return;
     caseSearchToggle.disabled = !caseSearchConfigured || !canUseCaseSearch;
     if (caseSearchToggle.disabled) caseSearchToggle.setAttribute("aria-pressed", "false");
-    caseSearchToggle.title = !canUseCaseSearch ? "课程案例库仅供管理员检索"
+    caseSearchToggle.title = !canUseCaseSearch ? "登录后可以检索案例库"
       : caseSearchConfigured ? "开启后检索课程案例。使用百炼模型时，问题会发送至百炼。"
       : "课程案例库尚未配置";
   }
@@ -193,7 +193,7 @@
     caseSearchToggle.setAttribute("aria-pressed", String(!caseSearchEnabled()));
   });
   window.addEventListener("auth:changed", (event) => {
-    canUseCaseSearch = Boolean(event.detail?.user?.is_admin);
+    canUseCaseSearch = Boolean(event.detail?.user);
     caseSearchToggle?.setAttribute("aria-pressed", "false");
     syncCaseSearchToggle();
   });

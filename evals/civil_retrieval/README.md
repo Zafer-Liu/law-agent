@@ -40,9 +40,9 @@ node evals/civil_retrieval/run_pglite.mjs --data $dataset --method bge --local-m
 
 ## 接入法晓
 
-配置项目 `.env` 中的 `CASE_VECTOR_DSN` 和 `CASE_VECTOR_CORPUS`（结果中的完整 `corpus_sha256`），然后重启项目。从 `/app` 进入「类案检索」，使用管理员账号登录。课程案例含真实当事人资料，页面为管理员开放。可通过 `GET /api/cases/config` 核对配置，通过 `POST /api/cases/search` 提交 `{"query":"脱敏案情或争点","limit":5}`（最多 3,000 字，返回 1–10 条）。配置中的模型应与导入的向量一致。
+配置项目 `.env` 中的 `CASE_VECTOR_DSN` 和 `CASE_VECTOR_CORPUS`（结果中的完整 `corpus_sha256`），然后重启项目。从 `/app` 进入「类案检索」，注册用户登录后即可使用。可通过 `GET /api/cases/config` 核对配置，通过 `POST /api/cases/search` 提交 `{"query":"脱敏案情或争点","limit":5}`（最多 3,000 字，返回 1–10 条）。配置中的模型应与导入的向量一致。
 
-管理员也可在「法律问答」输入区开启「检索案例库」。当前请求会附带 `case_search: true`，命中的裁判文书以「参考案例」显示在引用面板。开关默认关闭，案例检索失败时问答会继续并说明检索状态。
+登录后也可在「法律问答」输入区开启「检索案例库」。当前请求会附带 `case_search: true`，命中的裁判文书以「参考案例」显示在引用面板。开关默认关闭，案例检索失败时问答会继续并说明检索状态。
 
 配置 `CASE_VECTOR_MODEL=qwen3.7-text-embedding` 时，项目沿用百炼工作空间变量。使用本地 BGE 时，设置 `CASE_VECTOR_MODEL=BAAI/bge-m3` 和 `CASE_VECTOR_LOCAL_MODEL_DIR`。PGlite 可通过 `node evals/civil_retrieval/run_pglite.mjs --app` 启动法晓，继承 `CASE_PGLITE_*`，并自动注入本地 DSN。同一 PGlite 数据目录每次只由一个进程打开，导入和启动法晓请先后执行。
 

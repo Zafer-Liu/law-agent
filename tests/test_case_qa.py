@@ -26,10 +26,10 @@ class CaseQaTests(unittest.TestCase):
     def ask(self, client, **options):
         return client.post("/api/ask", json={"question": "对账后欠付货款，可以怎么办？", **options})
 
-    def test_admin_opt_in_adds_a_case_citation(self):
+    def test_member_opt_in_adds_a_case_citation(self):
         with patch("legalweb.case_vectors.CaseSearch.search", return_value=[CASE_HIT]) as search, \
                 patch("legalweb.app.qa.build_messages", wraps=build_messages) as build:
-            response = result_event(self.ask(self.admin, case_search=True))
+            response = result_event(self.ask(self.member, case_search=True))
         search.assert_called_once_with("对账后欠付货款，可以怎么办？", 3)
         self.assertIn("+cases", response["backend"])
         self.assertIn("已检索课程案例", response["notice"])
@@ -40,8 +40,19 @@ class CaseQaTests(unittest.TestCase):
         self.assertEqual(json.loads(messages[1]["content"])["evidence"][0]["source_kind"], "case")
         self.assertIn("类案比较", messages[0]["content"])
 
-    def test_defaults_to_off_and_requires_admin(self):
+    def test_defaults_to_off_and_requires_login(self):
+        guest = self.app.test_client()
         with patch("legalweb.case_vectors.CaseSearch.search") as search:
-            self.assertEqual(self.ask(self.member, case_search=True).status_code, 403)
-            self.assertNotIn("+cases", result_event(self.ask(self.admin))["backend"])
+            self.assertEqual(self.ask(guest, case_search=True).status_code, 401)
+            self.assertEqual(guest.get("/api/cases/config").status_code, 401)
+            self.assertEqual(guest.post("/api/cases/search", json={"query": "货款"}).status_code, 401)
+            self.assertNotIn("+cases", result_event(self.ask(self.member))["backend"])
         search.assert_not_called()
+
+    def test_member_can_search_from_the_cases_page(self):
+        self.assertEqual(self.member.get("/api/cases/config").status_code, 200)
+        with patch("legalweb.case_vectors.CaseSearch.search", return_value=[CASE_HIT]) as search:
+            response = self.member.post("/api/cases/search", json={"query": "拖欠货款", "limit": 3})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["matches"][0]["case_no"], 12)
+        search.assert_called_once_with("拖欠货款", 3)

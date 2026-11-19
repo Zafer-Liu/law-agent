@@ -14,8 +14,7 @@
 
   async function call(path, options) {
     const response = await fetch(api + path, options);
-    if (response.status === 401) throw new Error('请在右上角登录管理员账号。');
-    if (response.status === 403) throw new Error('课程案例库仅供管理员账号检索。');
+    if (response.status === 401) throw new Error('请先登录，再检索案例。');
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || '类案检索暂不可用，请稍后重试。');
     return data;
